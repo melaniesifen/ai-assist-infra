@@ -18,14 +18,6 @@ inventory to consume instead of retyping infrastructure constants in CDK stacks.
 - `src/iam-boundaries.js`: least-privilege documentation matrix helpers.
 - `test/*.test.js`: Node built-in tests.
 
-## Local Checks
-
-```sh
-node --test
-```
-
-No install step is required.
-
 ## Future CDK and Amplify Migration
 
 The architecture calls for Amplify Hosting, API Gateway HTTP APIs, an
@@ -47,3 +39,21 @@ Recommended migration path:
 This repo owns infrastructure shape, not application business logic. Service
 repos remain responsible for safe logging, authentication checks, context
 authorization, and secret-free responses.
+
+## Testing And Coverage
+
+Run the unit tests with either command:
+
+```sh
+node --test
+npm test
+```
+
+View the built-in coverage report in the terminal:
+
+```sh
+node --experimental-test-coverage --test
+npm run coverage
+```
+
+The coverage command uses Node's built-in test runner and prints a text report. If later tooling writes HTML, LCOV, TAP, JUnit, or build output, those generated paths are ignored by `.gitignore`.
