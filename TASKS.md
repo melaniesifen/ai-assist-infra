@@ -1,0 +1,59 @@
+# Task Breakdown
+
+Update this file as implementation progresses. Check off completed tasks in the same change that implements or verifies them.
+
+Canonical source: `../ai-assist-architecture/implementation-task-breakdown.md`.
+
+Relevant LLDs:
+
+- `../ai-assist-architecture/lld-operations-safety.md`
+- `../ai-assist-architecture/lld-auth-secrets-tenancy.md`
+- `../ai-assist-architecture/lld-actions-writeback.md`
+- `../ai-assist-architecture/lld-session-events-transport.md`
+
+## Completed Local Bootstrap
+
+- [x] Create dependency-light Node.js ESM infrastructure configuration package.
+- [x] Define environment name helpers and validation.
+- [x] EVT-001: Define MVP HTTP route inventory for auth, OAuth, provider secrets, resource sessions, commands, context preview, action approval/rejection, and apply-action.
+- [x] EVT-003: Include authenticated SSE route inventory for session events.
+- [x] ACTION-001: Define `ProposedActions` table spec with tenant scope, action metadata, 24-hour TTL, and encrypted payload field.
+- [x] AUTH-004: Define `SessionSecrets` table spec with tenant/user/provider scope, encrypted secret field, fingerprint, validation timestamp, and 8-hour TTL.
+- [x] CTX-002: Define `ContextConsentGrants` table spec with tenant/user/provider/context mode scope and expiry fields.
+- [x] AUTH-006: Define KMS purpose mapping for session secrets, OAuth tokens, proposed actions, and optional user secrets.
+- [x] AUTH-006: Define least-privilege IAM boundary documentation helpers by service, table, and KMS purpose.
+- [x] OPS-001: Define route rate-limit tiers and validation for required MVP routes.
+- [x] INFRA-002: Define DynamoDB table specs for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session events.
+- [x] INFRA-003: Define KMS alias strategy by environment and data class.
+- [x] Add unit tests for environments, route inventory, DynamoDB table specs, KMS purposes, rate-limit validation, and IAM boundary docs.
+- [x] Reach at least 95% line coverage.
+- [x] Document test and coverage commands in `README.md`.
+- [x] Ignore local prompts, feedback, coverage output, dependencies, and build artifacts.
+
+## Architecture Tasks Pending
+
+- [ ] REPO-001: Decide final infra language, CDK language, package manager, app layout, migration cost, deployment target, local workflow, and assertion-test strategy.
+- [ ] AUTH-006: Convert KMS purpose and IAM boundary helpers into deployable least-privilege IAM roles and KMS grants.
+- [ ] EVT-001: Implement API Gateway HTTP command routes with authentication integration and request/correlation ID propagation.
+- [ ] EVT-003: Implement SSE-capable service or Lambda path and edge route for session event streaming.
+- [ ] OPS-001: Implement API Gateway throttling and optional WAF rate-based rules for auth, OAuth, provider-key validation, command creation, context preview, SSE stream creation, and apply-action.
+- [ ] OPS-002: Keep app-level DynamoDB tenant-aware counters explicitly deferred for trusted-user MVP; add follow-up before public or untrusted access.
+- [ ] OPS-003: Configure metadata-only logging defaults and disable request/response body logging on sensitive routes.
+- [ ] OPS-004: Add CloudWatch metrics, dashboards, and alarms for latency, error categories, dependency failures, provider usage, throttling, KMS failures, OAuth failures, action conflicts, and apply failures.
+- [ ] OPS-005: Add runbook skeletons for provider outage/quota, Google OAuth revocation spike, KMS failure, SSE stream failure, rate-limit misconfiguration, and repeated action conflicts.
+- [ ] INFRA-001: Build AWS MVP stack with HTTP API, SSE-capable route, DynamoDB, KMS, CloudWatch logs/metrics, service IAM roles, configurable rate limits, configurable TTLs, and optional WAF.
+- [ ] INFRA-001: Exclude WebSocket API Gateway and connection registry from MVP infrastructure.
+- [ ] INFRA-002: Document DynamoDB access patterns before creating tables.
+- [ ] INFRA-003: Document KMS key rotation strategy at least at a high level.
+- [ ] INFRA-004: Define deployment order across contracts, infra tables/keys/routes, auth/secrets/context services, adapters, session events, and orchestration E2E.
+- [ ] INFRA-005: Define local/dev environment config for service endpoints, tenant/user bootstrap, provider adapters, Google OAuth, AWS/KMS/DynamoDB, and stubbed services.
+- [ ] E2E-005: Validate rate limits, expired secret behavior, revoked OAuth behavior, metadata-only logs, dependency metrics, throttles, token usage, and action conflict metrics.
+- [ ] Add integration tests or assertions for HTTP/SSE route auth, DynamoDB TTL tables, KMS grants, service IAM boundaries, and rate-limit configuration.
+- [ ] Define deployment pipeline tasks for synth/diff, environment parameter validation, least-privilege policy checks, migrations, smoke tests, and rollback notes.
+- [ ] Add failure-mode validation for KMS denial, DynamoDB throttling, SSE route failure, rate-limit misconfiguration, TTL expiry behavior, and alarm/runbook coverage.
+
+## Future Production Tasks
+
+- [ ] Add app-level tenant/user rate-limit counters before public or broader tenant access.
+- [ ] Add multi-environment promotion pipeline after MVP stack shape is stable.
+- [ ] Add cost, quota, and budget alarms once provider usage metrics are wired.

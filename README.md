@@ -40,6 +40,10 @@ This repo owns infrastructure shape, not application business logic. Service
 repos remain responsible for safe logging, authentication checks, context
 authorization, and secret-free responses.
 
+## Task Breakdown
+
+Implementation tasks are tracked in [TASKS.md](TASKS.md). Update the checkboxes there in the same change that implements or verifies a task.
+
 ## Testing And Coverage
 
 Run the unit tests with either command:
