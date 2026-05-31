@@ -1,6 +1,7 @@
 prompts/
 feedback/
 node_modules/
+cdk.out/
 coverage/
 .coverage/
 .nyc_output/

@@ -32,7 +32,10 @@ Relevant LLDs:
 
 ## Architecture Tasks Pending
 
-- [ ] REPO-001: Decide final infra language, CDK language, package manager, app layout, migration cost, deployment target, local workflow, and assertion-test strategy.
+- Approved direction: migrate from the temporary Node.js ESM bootstrap to TypeScript CDK.
+- Migration gate: Do not continue broad new feature work until the TypeScript CDK migration is completed or explicitly deferred.
+- [x] REPO-001: Decide final infra language, CDK language, package manager, app layout, migration cost, deployment target, local workflow, and assertion-test strategy.
+- [x] REPO-002: Migrate infrastructure to a TypeScript CDK app with equivalent route inventory, DynamoDB table specs, KMS purpose mapping, IAM boundary coverage, rate-limit configuration, assertion tests, synth workflow, and repo docs.
 - [ ] AUTH-006: Convert KMS purpose and IAM boundary helpers into deployable least-privilege IAM roles and KMS grants.
 - [ ] EVT-001: Implement API Gateway HTTP command routes with authentication integration and request/correlation ID propagation.
 - [ ] EVT-003: Implement SSE-capable service or Lambda path and edge route for session event streaming.

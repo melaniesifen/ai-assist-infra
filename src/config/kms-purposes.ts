@@ -1,13 +1,21 @@
-import { buildEnvironmentResourceName, normalizeEnvironmentName } from "./environments.js";
+import { buildEnvironmentResourceName, normalizeEnvironmentName } from "./environments";
 
 export const KMS_PURPOSES = Object.freeze({
   OAUTH_TOKENS: "oauth-tokens",
   SESSION_SECRETS: "session-secrets",
   PROPOSED_ACTIONS: "proposed-actions",
   USER_SECRETS: "user-secrets"
-});
+} as const);
 
-export const KMS_PURPOSE_MAPPING = Object.freeze({
+export type KmsPurpose = (typeof KMS_PURPOSES)[keyof typeof KMS_PURPOSES];
+
+export interface KmsPurposeMapping {
+  readonly description: string;
+  readonly owningService: string;
+  readonly optional?: boolean;
+}
+
+export const KMS_PURPOSE_MAPPING: Readonly<Record<KmsPurpose, KmsPurposeMapping>> = Object.freeze({
   [KMS_PURPOSES.OAUTH_TOKENS]: Object.freeze({
     description: "Encrypt Google OAuth access and refresh tokens.",
     owningService: "ai-assist-auth-service"
@@ -27,15 +35,15 @@ export const KMS_PURPOSE_MAPPING = Object.freeze({
   })
 });
 
-export function listKmsPurposeMappings({ includeOptional = true } = {}) {
+export function listKmsPurposeMappings({ includeOptional = true }: { readonly includeOptional?: boolean } = {}): Array<KmsPurposeMapping & { readonly purpose: KmsPurpose }> {
   return Object.entries(KMS_PURPOSE_MAPPING)
     .filter(([, mapping]) => includeOptional || mapping.optional !== true)
-    .map(([purpose, mapping]) => ({ purpose, ...mapping }));
+    .map(([purpose, mapping]) => ({ purpose: purpose as KmsPurpose, ...mapping }));
 }
 
-export function getKmsAlias(environment, purpose) {
+export function getKmsAlias(environment: string, purpose: string): string {
   normalizeEnvironmentName(environment);
-  if (!KMS_PURPOSE_MAPPING[purpose]) {
+  if (!KMS_PURPOSE_MAPPING[purpose as KmsPurpose]) {
     throw new Error(`unknown KMS purpose: ${purpose}`);
   }
 

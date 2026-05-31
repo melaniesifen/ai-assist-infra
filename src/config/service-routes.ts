@@ -5,7 +5,9 @@ export const SERVICES = Object.freeze({
   SESSION_EVENTS: "ai-assist-session-events-service",
   CONTEXT: "ai-assist-context-service",
   GOOGLE_DOCS_ADAPTER: "ai-assist-google-docs-adapter"
-});
+} as const);
+
+export type ServiceName = (typeof SERVICES)[keyof typeof SERVICES];
 
 export const ROUTE_RATE_LIMIT_TIERS = Object.freeze({
   PUBLIC_LOW: "PUBLIC_LOW",
@@ -13,9 +15,20 @@ export const ROUTE_RATE_LIMIT_TIERS = Object.freeze({
   EXPENSIVE: "EXPENSIVE",
   STREAM: "STREAM",
   MUTATION: "MUTATION"
-});
+} as const);
 
-export const SERVICE_ROUTES = Object.freeze([
+export type RouteRateLimitTier = (typeof ROUTE_RATE_LIMIT_TIERS)[keyof typeof ROUTE_RATE_LIMIT_TIERS];
+
+export interface ServiceRoute {
+  readonly method: string;
+  readonly path: string;
+  readonly routeKey: string;
+  readonly service: ServiceName;
+  readonly rateLimitTier: RouteRateLimitTier;
+  readonly requiresAuthentication: boolean;
+}
+
+export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
   route("GET", "/health", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
   route("GET", "/auth/google/start", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
   route("GET", "/auth/google/callback", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
@@ -36,7 +49,7 @@ export const SERVICE_ROUTES = Object.freeze([
   route("POST", "/resource-sessions/{sessionId}/apply-action", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.MUTATION)
 ]);
 
-function route(method, path, service, rateLimitTier) {
+function route(method: string, path: string, service: ServiceName, rateLimitTier: RouteRateLimitTier): ServiceRoute {
   return Object.freeze({
     method,
     path,
@@ -47,16 +60,16 @@ function route(method, path, service, rateLimitTier) {
   });
 }
 
-export function listServiceRoutes() {
+export function listServiceRoutes(): ServiceRoute[] {
   return SERVICE_ROUTES.map((item) => ({ ...item }));
 }
 
-export function findServiceRoute(method, path) {
+export function findServiceRoute(method: string, path: string): ServiceRoute | null {
   return SERVICE_ROUTES.find((item) => item.method === method && item.path === path) ?? null;
 }
 
-export function groupRoutesByService() {
-  return SERVICE_ROUTES.reduce((groups, item) => {
+export function groupRoutesByService(): Record<string, ServiceRoute[]> {
+  return SERVICE_ROUTES.reduce<Record<string, ServiceRoute[]>>((groups, item) => {
     groups[item.service] = groups[item.service] ?? [];
     groups[item.service].push({ ...item });
     return groups;

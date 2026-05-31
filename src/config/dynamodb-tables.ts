@@ -1,3 +1,14 @@
+export interface DynamoDbTableSpec {
+  readonly name: string;
+  readonly partitionKey: string;
+  readonly sortKey: string | null;
+  readonly ttlAttribute: string | null;
+  readonly defaultTtlHours: number | null;
+  readonly encryptedFields: readonly string[];
+  readonly attributes: readonly string[];
+  readonly optional: boolean;
+}
+
 export const DYNAMODB_TABLES = Object.freeze({
   Tenants: table("Tenants", "tenantId", null, {
     attributes: ["tenantId", "name", "createdAt", "updatedAt", "status"]
@@ -37,29 +48,34 @@ export const DYNAMODB_TABLES = Object.freeze({
     ttlAttribute: "ttl",
     encryptedFields: ["encryptedPayload"]
   })
-});
+} satisfies Readonly<Record<string, DynamoDbTableSpec>>);
 
-function table(name, partitionKey, sortKey, options = {}) {
+function table(
+  name: string,
+  partitionKey: string,
+  sortKey: string | null,
+  options: Partial<Omit<DynamoDbTableSpec, "name" | "partitionKey" | "sortKey" | "optional">> & { readonly optional?: boolean } = {}
+): DynamoDbTableSpec {
   return Object.freeze({
     name,
     partitionKey,
     sortKey,
     ttlAttribute: options.ttlAttribute ?? null,
     defaultTtlHours: options.defaultTtlHours ?? null,
-    encryptedFields: Object.freeze(options.encryptedFields ?? []),
-    attributes: Object.freeze(options.attributes ?? []),
+    encryptedFields: Object.freeze([...(options.encryptedFields ?? [])]),
+    attributes: Object.freeze([...(options.attributes ?? [])]),
     optional: options.optional === true
   });
 }
 
-export function listDynamoDbTableSpecs({ includeOptional = true } = {}) {
+export function listDynamoDbTableSpecs({ includeOptional = true }: { readonly includeOptional?: boolean } = {}): DynamoDbTableSpec[] {
   return Object.values(DYNAMODB_TABLES)
     .filter((spec) => includeOptional || !spec.optional)
     .map((spec) => cloneSpec(spec));
 }
 
-export function getDynamoDbTableSpec(name) {
-  const spec = DYNAMODB_TABLES[name];
+export function getDynamoDbTableSpec(name: string): DynamoDbTableSpec {
+  const spec = DYNAMODB_TABLES[name as keyof typeof DYNAMODB_TABLES];
   if (!spec) {
     throw new Error(`unknown DynamoDB table: ${name}`);
   }
@@ -67,7 +83,7 @@ export function getDynamoDbTableSpec(name) {
   return cloneSpec(spec);
 }
 
-function cloneSpec(spec) {
+function cloneSpec(spec: DynamoDbTableSpec): DynamoDbTableSpec {
   return {
     ...spec,
     encryptedFields: [...spec.encryptedFields],

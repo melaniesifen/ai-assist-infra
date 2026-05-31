@@ -2,12 +2,22 @@
   "name": "ai-assist-infra",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "test": "node --test",
-    "coverage": "node --experimental-test-coverage --test"
+    "build": "tsc --project tsconfig.json",
+    "test": "npm run build && node --test \"dist/test/**/*.test.js\"",
+    "coverage": "npm run build && node --experimental-test-coverage --test \"dist/test/**/*.test.js\"",
+    "synth": "npm run build && cdk synth --app \"node dist/bin/ai-assist-infra.js\""
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.198.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "aws-cdk": "^2.1021.0",
+    "typescript": "^5.8.3"
   }
 }

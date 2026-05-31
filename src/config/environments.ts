@@ -3,9 +3,11 @@ export const ENVIRONMENTS = Object.freeze({
   DEV: "dev",
   STAGE: "stage",
   PROD: "prod"
-});
+} as const);
 
-const ENVIRONMENT_ALIASES = Object.freeze({
+export type EnvironmentName = (typeof ENVIRONMENTS)[keyof typeof ENVIRONMENTS];
+
+const ENVIRONMENT_ALIASES: Readonly<Record<string, EnvironmentName>> = Object.freeze({
   local: ENVIRONMENTS.LOCAL,
   development: ENVIRONMENTS.DEV,
   dev: ENVIRONMENTS.DEV,
@@ -15,7 +17,7 @@ const ENVIRONMENT_ALIASES = Object.freeze({
   prod: ENVIRONMENTS.PROD
 });
 
-export function normalizeEnvironmentName(name) {
+export function normalizeEnvironmentName(name: string): EnvironmentName {
   if (typeof name !== "string" || !name.trim()) {
     throw new Error("environment name is required");
   }
@@ -28,11 +30,11 @@ export function normalizeEnvironmentName(name) {
   return normalized;
 }
 
-export function isProductionEnvironment(name) {
+export function isProductionEnvironment(name: string): boolean {
   return normalizeEnvironmentName(name) === ENVIRONMENTS.PROD;
 }
 
-export function buildEnvironmentResourceName(environment, resourceName) {
+export function buildEnvironmentResourceName(environment: string, resourceName: string): string {
   const normalizedEnvironment = normalizeEnvironmentName(environment);
   if (typeof resourceName !== "string" || !resourceName.trim()) {
     throw new Error("resource name is required");

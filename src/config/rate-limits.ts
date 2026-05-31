@@ -1,6 +1,12 @@
-import { ROUTE_RATE_LIMIT_TIERS, SERVICE_ROUTES } from "./service-routes.js";
+import { ROUTE_RATE_LIMIT_TIERS, RouteRateLimitTier, SERVICE_ROUTES } from "./service-routes";
 
-export const DEFAULT_RATE_LIMIT_TIERS = Object.freeze({
+export interface RateLimit {
+  readonly requestsPerMinute: number;
+  readonly burst: number;
+  readonly tier?: RouteRateLimitTier;
+}
+
+export const DEFAULT_RATE_LIMIT_TIERS: Readonly<Record<RouteRateLimitTier, RateLimit>> = Object.freeze({
   [ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW]: Object.freeze({ requestsPerMinute: 30, burst: 10 }),
   [ROUTE_RATE_LIMIT_TIERS.USER_STANDARD]: Object.freeze({ requestsPerMinute: 120, burst: 30 }),
   [ROUTE_RATE_LIMIT_TIERS.EXPENSIVE]: Object.freeze({ requestsPerMinute: 20, burst: 5 }),
@@ -18,8 +24,8 @@ const REQUIRED_RATE_LIMIT_PATHS = Object.freeze([
   "/resource-sessions/{sessionId}/apply-action"
 ]);
 
-export function buildDefaultRouteRateLimits() {
-  return SERVICE_ROUTES.reduce((config, route) => {
+export function buildDefaultRouteRateLimits(): Record<string, RateLimit> {
+  return SERVICE_ROUTES.reduce<Record<string, RateLimit>>((config, route) => {
     config[route.routeKey] = {
       ...DEFAULT_RATE_LIMIT_TIERS[route.rateLimitTier],
       tier: route.rateLimitTier
@@ -28,22 +34,23 @@ export function buildDefaultRouteRateLimits() {
   }, {});
 }
 
-export function validateRateLimitConfig(config) {
-  const errors = [];
+export function validateRateLimitConfig(config: unknown): { readonly valid: boolean; readonly errors: string[] } {
+  const errors: string[] = [];
 
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     return { valid: false, errors: ["rate limit config must be an object"] };
   }
 
+  const rateLimitConfig = config as Record<string, Partial<RateLimit>>;
   const knownRouteKeys = new Set(SERVICE_ROUTES.map((route) => route.routeKey));
-  for (const routeKey of Object.keys(config)) {
+  for (const routeKey of Object.keys(rateLimitConfig)) {
     if (!knownRouteKeys.has(routeKey)) {
       errors.push(`${routeKey} is not a known service route`);
     }
   }
 
   for (const route of SERVICE_ROUTES) {
-    const entry = config[route.routeKey];
+    const entry = rateLimitConfig[route.routeKey];
     if (!entry) {
       if (REQUIRED_RATE_LIMIT_PATHS.includes(route.path)) {
         errors.push(`${route.routeKey} is missing required rate limit config`);
@@ -53,7 +60,7 @@ export function validateRateLimitConfig(config) {
 
     validatePositiveInteger(entry.requestsPerMinute, `${route.routeKey}.requestsPerMinute`, errors);
     validatePositiveInteger(entry.burst, `${route.routeKey}.burst`, errors);
-    if (entry.burst > entry.requestsPerMinute) {
+    if (typeof entry.burst === "number" && typeof entry.requestsPerMinute === "number" && entry.burst > entry.requestsPerMinute) {
       errors.push(`${route.routeKey}.burst cannot exceed requestsPerMinute`);
     }
   }
@@ -61,8 +68,8 @@ export function validateRateLimitConfig(config) {
   return { valid: errors.length === 0, errors };
 }
 
-function validatePositiveInteger(value, field, errors) {
-  if (!Number.isInteger(value) || value <= 0) {
+function validatePositiveInteger(value: unknown, field: string, errors: string[]): void {
+  if (!Number.isInteger(value) || Number(value) <= 0) {
     errors.push(`${field} must be a positive integer`);
   }
 }

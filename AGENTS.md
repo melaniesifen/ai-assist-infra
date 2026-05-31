@@ -2,7 +2,7 @@
 
 ## Repo Purpose
 
-`ai-assist-infra` owns infrastructure definitions, environment configuration, service routes, DynamoDB table specs, KMS purposes, IAM boundaries, rate limits, and operational wiring.
+`ai-assist-infra` owns the TypeScript CDK app, environment configuration, service routes, DynamoDB table specs, KMS purposes, IAM boundaries, rate limits, and operational wiring.
 
 ## Agent Instructions
 
@@ -11,14 +11,15 @@
 - Do not add WebSocket infrastructure to MVP unless the product requirement changes.
 - Include HTTP command APIs and SSE-capable session event routes for MVP.
 - Keep `SessionSecrets` and `ProposedActions` TTL-bound and encrypted.
+- Use repo-local npm manifests and lockfiles for CDK tooling. Do not rely on global CDK packages.
 - Use metadata-only logging defaults. Do not configure request/response body logging for sensitive routes.
 - Keep app-level tenant-aware counters documented as deferred until broader/public access.
 - Add tests for environment validation, required routes, rate-limit configuration, KMS purpose mapping, DynamoDB table specs, and IAM boundary docs.
 
 ## Commands
 
-- Run tests with `node --test`.
-- `npm` may not be available in this environment; prefer the direct Node command.
+- Run tests with `npm test`.
+- Run a local CDK synth with `npm run synth`.
 
 ## Review Notes
 

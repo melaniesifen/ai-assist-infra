@@ -1,40 +1,33 @@
 # ai-assist-infra
 
-Dependency-light infrastructure configuration bootstrap for the AI Assist
-Platform.
+TypeScript CDK infrastructure app for the AI Assist Platform.
 
-This repo intentionally does not install CDK yet. The current helpers capture
-the environment, route, DynamoDB, KMS, rate-limit, and IAM boundary contracts in
-plain Node modules with `node:test` coverage. That gives future IaC a tested
-inventory to consume instead of retyping infrastructure constants in CDK stacks.
+This repo owns the deployable infrastructure shape plus the typed inventories
+used by assertion tests. The previous dependency-light Node.js ESM bootstrap has
+been superseded by a repo-local TypeScript CDK app while preserving the route,
+DynamoDB, KMS, IAM boundary, and rate-limit contracts.
 
 ## Current Contents
 
-- `src/environments.js`: canonical environment names and validation.
-- `src/service-routes.js`: MVP HTTP/SSE route inventory and service ownership.
-- `src/dynamodb-tables.js`: table key, TTL, and encryption metadata.
-- `src/kms-purposes.js`: KMS purpose-to-alias mapping.
-- `src/rate-limits.js`: default route rate limits and validation.
-- `src/iam-boundaries.js`: least-privilege documentation matrix helpers.
-- `test/*.test.js`: Node built-in tests.
+- `bin/ai-assist-infra.ts`: CDK app entry point.
+- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP/SSE route inventory, DynamoDB tables, KMS keys, IAM roles, and default API throttling.
+- `src/config/*.ts`: typed environment, route, DynamoDB, KMS, rate-limit, and IAM boundary inventories.
+- `test/*.test.ts`: Node built-in tests plus CDK assertion tests.
+- `cdk.json`, `tsconfig.json`, `package.json`, and `package-lock.json`: repo-local CDK and TypeScript tooling.
 
-## Future CDK and Amplify Migration
+## Stack Scope
 
-The architecture calls for Amplify Hosting, API Gateway HTTP APIs, an
-SSE-capable route, Lambda or service compute, DynamoDB, KMS, IAM roles,
-CloudWatch, and WAF/API Gateway throttling.
+The current CDK app creates:
 
-Recommended migration path:
+- KMS keys and aliases for OAuth tokens, session secrets, proposed actions, and future user secrets.
+- DynamoDB tables for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session event replay metadata.
+- HTTP API route inventory for MVP command routes and the SSE session event route.
+- Service IAM roles with table and KMS grants derived from the IAM boundary matrix.
+- Default API Gateway throttling based on the route rate-limit tiers.
 
-1. Add CDK after package management is agreed for this repo.
-2. Import these pure helpers from CDK stack code and treat tests here as the
-   source of truth for route/table/key inventories.
-3. Add Amplify hosting resources for `ai-assist-web`; never inject model
-   provider keys or OAuth tokens into frontend config.
-4. Convert the IAM boundary matrix into concrete service roles with table and
-   KMS grants scoped by service ownership.
-5. Keep app-level DynamoDB rate-limit counters deferred until public or broader
-   tenant access requires them.
+The route inventory intentionally does not wire service integrations or route
+authorizers yet. Those remain pending tasks so service endpoints and auth
+integration can be implemented with the owning services.
 
 This repo owns infrastructure shape, not application business logic. Service
 repos remain responsible for safe logging, authentication checks, context
@@ -46,17 +39,27 @@ Implementation tasks are tracked in [TASKS.md](TASKS.md). Update the checkboxes 
 
 ## Testing And Coverage
 
-Run the unit tests with either command:
+Install repo-local tooling:
 
 ```sh
-node --test
+npm install
+```
+
+Run the TypeScript build and assertion tests:
+
+```sh
 npm test
+```
+
+Run a local CDK synth:
+
+```sh
+npm run synth
 ```
 
 View the built-in coverage report in the terminal:
 
 ```sh
-node --experimental-test-coverage --test
 npm run coverage
 ```
 
