@@ -36,16 +36,16 @@ Relevant LLDs:
 - Migration gate: Do not continue broad new feature work until the TypeScript CDK migration is completed or explicitly deferred.
 - [x] REPO-001: Decide final infra language, CDK language, package manager, app layout, migration cost, deployment target, local workflow, and assertion-test strategy.
 - [x] REPO-002: Migrate infrastructure to a TypeScript CDK app with equivalent route inventory, DynamoDB table specs, KMS purpose mapping, IAM boundary coverage, rate-limit configuration, assertion tests, synth workflow, and repo docs.
-- [ ] AUTH-006: Convert KMS purpose and IAM boundary helpers into deployable least-privilege IAM roles and KMS grants.
-- [ ] EVT-001: Implement API Gateway HTTP command routes with authentication integration and request/correlation ID propagation.
-- [ ] EVT-003: Implement SSE-capable service or Lambda path and edge route for session event streaming.
+- [ ] AUTH-006: Convert KMS purpose and IAM boundary helpers into deployable least-privilege IAM roles and KMS grants. Infra owns this slice because the workspace task requires deployable KMS keys, key policies, IAM roles, and grants; service repos still own application authorization and typed dependency-error handling.
+- [ ] EVT-001: Implement API Gateway HTTP command routes with authentication integration and request/correlation ID propagation. Infra owns the edge route, authorizer wiring, and request/correlation ID propagation plumbing; command semantics remain owned by the service repos and shared contracts.
+- [ ] EVT-003: Implement SSE-capable service or Lambda path and edge route for session event streaming. Infra owns the deployable streaming path and edge route; session event payload contracts and publishing semantics remain owned by contracts, session-events, and orchestration repos.
 - [ ] OPS-001: Implement API Gateway throttling and optional WAF rate-based rules for auth, OAuth, provider-key validation, command creation, context preview, SSE stream creation, and apply-action.
-- [ ] OPS-002: Keep app-level DynamoDB tenant-aware counters explicitly deferred for trusted-user MVP; add follow-up before public or untrusted access.
+- [ ] OPS-002: Keep app-level DynamoDB tenant-aware counters explicitly deferred for trusted-user MVP; add follow-up before public or untrusted access. Infra owns the deployment deferral and future counter infrastructure hooks because the workspace task avoids overbuilding DynamoDB TTL counters while preserving the public-launch path.
 - [ ] OPS-003: Configure metadata-only logging defaults and disable request/response body logging on sensitive routes.
 - [ ] OPS-004: Add CloudWatch metrics, dashboards, and alarms for latency, error categories, dependency failures, provider usage, throttling, KMS failures, OAuth failures, action conflicts, and apply failures.
 - [ ] OPS-005: Add runbook skeletons for provider outage/quota, Google OAuth revocation spike, KMS failure, SSE stream failure, rate-limit misconfiguration, and repeated action conflicts.
-- [ ] INFRA-001: Build AWS MVP stack with HTTP API, SSE-capable route, DynamoDB, KMS, CloudWatch logs/metrics, service IAM roles, configurable rate limits, configurable TTLs, and optional WAF.
-- [ ] INFRA-001: Exclude WebSocket API Gateway and connection registry from MVP infrastructure.
+- [ ] INFRA-001: Build AWS MVP stack with HTTP API, SSE-capable route, DynamoDB, KMS, CloudWatch logs/metrics, service IAM roles, configurable rate limits, configurable TTLs, and optional WAF. Infra owns this workspace definition task because it is the deployable AWS stack shape that assembles shared service prerequisites without owning service business logic.
+- [ ] INFRA-001: Exclude WebSocket API Gateway and connection registry from MVP infrastructure. Infra owns this negative requirement because the MVP stack must keep WebSocket resources out until a later transport decision adds them.
 - [ ] INFRA-002: Document DynamoDB access patterns before creating tables.
 - [ ] INFRA-003: Document KMS key rotation strategy at least at a high level.
 - [ ] INFRA-004: Define deployment order across contracts, infra tables/keys/routes, auth/secrets/context services, adapters, session events, and orchestration E2E.
