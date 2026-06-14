@@ -14,7 +14,7 @@ import { KMS_PURPOSES, getKmsAlias, getTargetKmsAlias, listKmsPurposeMappings } 
 import { FORBIDDEN_LOG_FIELDS, SAFE_AUDIT_EVENTS, validateOperationalGuardrails } from "../src/config/operational-guardrails";
 import { buildDefaultRouteRateLimits, validateRateLimitConfig } from "../src/config/rate-limits";
 import { REQUIRED_RUNTIME_CONFIG, validateRuntimeConfig } from "../src/config/runtime-config";
-import { SERVICES, findServiceRoute, groupRoutesByService, listServiceRoutes } from "../src/config/service-routes";
+import { SERVICE_ROUTES, SERVICES, findServiceRoute, groupRoutesByService, listServiceRoutes } from "../src/config/service-routes";
 
 test("normalizes supported environment aliases", () => {
   assert.equal(normalizeEnvironmentName("production"), "prod");
@@ -49,6 +49,8 @@ test("includes MVP SSE route under the session events service", () => {
   assert.equal(route?.service, SERVICES.SESSION_EVENTS);
   assert.equal(route?.rateLimitTier, "STREAM");
   assert.equal(route?.requiresAuthentication, true);
+  assert.equal(route?.edgeSurface, "public-alb");
+  assert.equal(SERVICE_ROUTES.filter((candidate) => candidate.intentionallyPlaceholder).map((candidate) => candidate.routeKey).join(","), "GET /health");
 });
 
 test("returns defensive route copies grouped by service", () => {
@@ -86,21 +88,34 @@ test("keeps KMS purpose validation while resolving to one shared app key", () =>
 });
 
 test("validates trusted-user runtime config without leaking secret values", () => {
-  const validConfig = Object.fromEntries(REQUIRED_RUNTIME_CONFIG.map((entry) => [entry.name, entry.name.endsWith("_URL") || entry.name.endsWith("_URI") || entry.name === "AI_ASSIST_ALLOWED_CORS_ORIGINS" ? "https://example.test" : "configured"]));
-  validConfig.AI_ASSIST_TRUSTED_USER_MODE = "true";
+  const validConfig = Object.fromEntries(REQUIRED_RUNTIME_CONFIG.map((entry) => [entry.name, "configured"]));
+  validConfig.WEB_APP_BASE_URL = "https://example.test";
+  validConfig.API_BASE_URL = "https://api.example.test";
+  validConfig.SSE_BASE_URL = "https://sse.example.test";
+  validConfig.GOOGLE_OAUTH_CALLBACK_URL = "https://api.example.test/auth/google/callback";
+  validConfig.ALLOWED_ORIGINS = "https://example.test";
+  validConfig.SESSION_SECRET_TTL_HOURS = "8";
+  validConfig.PROPOSED_ACTION_TTL_HOURS = "24";
+  validConfig.SSE_HEARTBEAT_SECONDS = "25";
+  validConfig.SSE_REPLAY_WINDOW_SECONDS = "300";
+  validConfig.TRUSTED_USER_MODE = "true";
   assert.equal(validateRuntimeConfig(validConfig).valid, true);
 
   const invalid = validateRuntimeConfig({
     ...validConfig,
-    GOOGLE_OAUTH_CLIENT_SECRET_ARN: "super-secret-value",
-    AI_ASSIST_AUTH_SERVICE_URL: "http://localhost:8080",
-    AI_ASSIST_TRUSTED_USER_MODE: "false"
+    GOOGLE_OAUTH_CLIENT_SECRET_REF: "super-secret-value",
+    API_BASE_URL: "http://localhost:8080",
+    ALLOWED_ORIGINS: "https://example.test,http://bad.example.test",
+    SSE_HEARTBEAT_SECONDS: "soon",
+    TRUSTED_USER_MODE: "false"
   });
 
   assert.equal(invalid.valid, false);
   assert.equal(invalid.setupStatus, "blocked");
-  assert.ok(invalid.safeMessages.some((message) => message.includes("AI_ASSIST_AUTH_SERVICE_URL must use https")));
-  assert.ok(invalid.safeMessages.some((message) => message.includes("AI_ASSIST_TRUSTED_USER_MODE must be true")));
+  assert.ok(invalid.safeMessages.some((message) => message.includes("API_BASE_URL must use https")));
+  assert.ok(invalid.safeMessages.some((message) => message.includes("ALLOWED_ORIGINS origin http://bad.example.test must use https")));
+  assert.ok(invalid.safeMessages.some((message) => message.includes("TRUSTED_USER_MODE must be true")));
+  assert.ok(invalid.safeMessages.some((message) => message.includes("SSE_HEARTBEAT_SECONDS must be a positive integer")));
   assert.equal(JSON.stringify(invalid).includes("super-secret-value"), false);
 });
 

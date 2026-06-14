@@ -26,10 +26,15 @@ export interface ServiceRoute {
   readonly service: ServiceName;
   readonly rateLimitTier: RouteRateLimitTier;
   readonly requiresAuthentication: boolean;
+  readonly edgeSurface: "api-gateway" | "public-alb";
+  readonly intentionallyPlaceholder: boolean;
 }
 
 export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
-  route("GET", "/health", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
+  route("GET", "/health", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW, {
+    requiresAuthentication: false,
+    intentionallyPlaceholder: true
+  }),
   route("GET", "/auth/session", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("GET", "/auth/google/start", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
   route("GET", "/auth/google/callback", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
@@ -42,7 +47,9 @@ export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
   route("POST", "/resource-sessions", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("GET", "/resource-sessions/{sessionId}", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("POST", "/resource-sessions/{sessionId}/commands", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.EXPENSIVE),
-  route("GET", "/resource-sessions/{sessionId}/events", SERVICES.SESSION_EVENTS, ROUTE_RATE_LIMIT_TIERS.STREAM),
+  route("GET", "/resource-sessions/{sessionId}/events", SERVICES.SESSION_EVENTS, ROUTE_RATE_LIMIT_TIERS.STREAM, {
+    edgeSurface: "public-alb"
+  }),
   route("GET", "/context-modes", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("PUT", "/resource-sessions/{sessionId}/context-mode", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("POST", "/resource-sessions/{sessionId}/context-preview", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.EXPENSIVE),
@@ -52,14 +59,22 @@ export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
   route("POST", "/resource-sessions/{sessionId}/apply-action", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.MUTATION)
 ]);
 
-function route(method: string, path: string, service: ServiceName, rateLimitTier: RouteRateLimitTier): ServiceRoute {
+function route(
+  method: string,
+  path: string,
+  service: ServiceName,
+  rateLimitTier: RouteRateLimitTier,
+  options: Partial<Pick<ServiceRoute, "edgeSurface" | "intentionallyPlaceholder" | "requiresAuthentication">> = {}
+): ServiceRoute {
   return Object.freeze({
     method,
     path,
     routeKey: `${method} ${path}`,
     service,
     rateLimitTier,
-    requiresAuthentication: path !== "/health"
+    requiresAuthentication: options.requiresAuthentication ?? true,
+    edgeSurface: options.edgeSurface ?? "api-gateway",
+    intentionallyPlaceholder: options.intentionallyPlaceholder ?? false
   });
 }
 

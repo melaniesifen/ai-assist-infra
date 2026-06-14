@@ -109,23 +109,27 @@ test("synthesizes one shared KMS app key for all configured purposes", () => {
 
 test("synthesizes the HTTP and SSE route inventory", () => {
   const template = synthTemplate();
+  const apiGatewayRoutes = SERVICE_ROUTES.filter((route) => route.edgeSurface === "api-gateway");
 
-  template.resourceCountIs("AWS::ApiGatewayV2::Route", SERVICE_ROUTES.length);
-  template.resourceCountIs("AWS::ApiGatewayV2::Integration", 1);
+  template.resourceCountIs("AWS::ApiGatewayV2::Route", apiGatewayRoutes.length);
+  template.resourceCountIs("AWS::ApiGatewayV2::VpcLink", 1);
+  template.resourceCountIs("AWS::ApiGatewayV2::Authorizer", 1);
   template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
-    RouteKey: "GET /resource-sessions/{sessionId}/events",
+    RouteKey: "POST /resource-sessions/{sessionId}/commands",
+    AuthorizationType: "JWT",
     Target: Match.anyValue()
   });
   template.hasResourceProperties("AWS::ApiGatewayV2::Integration", {
-    IntegrationType: "AWS_PROXY",
-    PayloadFormatVersion: "2.0"
+    IntegrationType: "HTTP_PROXY",
+    ConnectionType: "VPC_LINK",
+    PayloadFormatVersion: "1.0"
   });
   template.hasResourceProperties("AWS::Lambda::Function", {
-    FunctionName: "ai-assist-dev-us-west-2-route-placeholder",
+    FunctionName: "ai-assist-dev-us-west-2-health-placeholder",
     Runtime: "nodejs20.x"
   });
   template.hasResourceProperties("AWS::Logs::LogGroup", {
-    LogGroupName: "/aws/lambda/ai-assist-dev-us-west-2-route-placeholder",
+    LogGroupName: "/aws/lambda/ai-assist-dev-us-west-2-health-placeholder",
     RetentionInDays: 30
   });
   template.hasResourceProperties("AWS::Lambda::Permission", {
@@ -139,10 +143,6 @@ test("synthesizes the HTTP and SSE route inventory", () => {
       "POST /resource-sessions/{sessionId}/commands": {
         ThrottlingBurstLimit: 5,
         ThrottlingRateLimit: 20 / 60
-      },
-      "GET /resource-sessions/{sessionId}/events": {
-        ThrottlingBurstLimit: 3,
-        ThrottlingRateLimit: 10 / 60
       }
     }),
     AccessLogSettings: Match.objectLike({
@@ -152,6 +152,44 @@ test("synthesizes the HTTP and SSE route inventory", () => {
         status: "$context.status"
       }))
     })
+  });
+});
+
+test("synthesizes Fargate service runtimes and public ALB SSE hosting", () => {
+  const template = synthTemplate();
+
+  template.resourceCountIs("AWS::ECS::Cluster", 1);
+  template.hasResourceProperties("AWS::ElasticLoadBalancingV2::LoadBalancer", {
+    Scheme: "internet-facing",
+    LoadBalancerAttributes: Match.arrayWith([
+      {
+        Key: "idle_timeout.timeout_seconds",
+        Value: "900"
+      }
+    ])
+  });
+  template.hasResourceProperties("AWS::ECS::Service", {
+    ServiceName: "ai-assist-dev-us-west-2-ai-assist-session-events-service-sse"
+  });
+  template.hasResourceProperties("AWS::ECS::TaskDefinition", {
+    ContainerDefinitions: Match.arrayWith([
+      Match.objectLike({
+        Environment: Match.arrayWith([
+          {
+            Name: "SSE_HEARTBEAT_SECONDS",
+            Value: "25"
+          },
+          {
+            Name: "SSE_REPLAY_WINDOW_SECONDS",
+            Value: "300"
+          }
+        ])
+      })
+    ])
+  });
+  template.hasResourceProperties("AWS::Logs::LogGroup", {
+    LogGroupName: "/aws/ecs/ai-assist-dev-us-west-2-ai-assist-session-events-service-sse",
+    RetentionInDays: 30
   });
 });
 
