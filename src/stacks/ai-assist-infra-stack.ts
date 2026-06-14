@@ -4,6 +4,7 @@ import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 import { DynamoDbTableSpec, listDynamoDbTableSpecs } from "../config/dynamodb-tables";
@@ -162,11 +163,29 @@ export class AiAssistInfraStack extends cdk.Stack {
       )
     });
 
+    const placeholderFunction = this.createRoutePlaceholderFunction(deploymentTarget);
+    const placeholderIntegration = new apigatewayv2.CfnIntegration(this, "RoutePlaceholderIntegration", {
+      apiId: api.ref,
+      integrationType: "AWS_PROXY",
+      integrationUri: placeholderFunction.functionArn,
+      payloadFormatVersion: "2.0",
+      description: "Metadata-safe placeholder integration until service routes are wired."
+    });
+    new lambda.CfnPermission(this, "RoutePlaceholderInvokePermission", {
+      action: "lambda:InvokeFunction",
+      functionName: placeholderFunction.functionName,
+      principal: "apigateway.amazonaws.com",
+      sourceArn: cdk.Fn.sub("arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*", {
+        ApiId: api.ref
+      })
+    });
+
     for (const route of SERVICE_ROUTES) {
       const routeResource = new apigatewayv2.CfnRoute(this, routeConstructId(route.routeKey), {
         apiId: api.ref,
         routeKey: route.routeKey,
-        authorizationType: "NONE"
+        authorizationType: "NONE",
+        target: `integrations/${placeholderIntegration.ref}`
       });
       routeResource.cfnOptions.metadata = {
         owningService: route.service,
@@ -176,6 +195,47 @@ export class AiAssistInfraStack extends cdk.Stack {
     }
 
     return api;
+  }
+
+  private createRoutePlaceholderFunction(deploymentTarget: DeploymentTarget): lambda.Function {
+    const functionName = buildTargetResourceName(deploymentTarget, "route-placeholder");
+    const logGroup = new logs.LogGroup(this, "RoutePlaceholderLogGroup", {
+      logGroupName: `/aws/lambda/${functionName}`,
+      retention: retentionDays(deploymentTarget.logRetentionDays),
+      removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+    });
+
+    return new lambda.Function(this, "RoutePlaceholderFunction", {
+      functionName,
+      description: "Metadata-safe placeholder for deployable API routes before service integrations are wired.",
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: "index.handler",
+      timeout: cdk.Duration.seconds(5),
+      logGroup,
+      code: lambda.Code.fromInline(`
+exports.handler = async (event) => {
+  const routeKey = event && typeof event.routeKey === "string" ? event.routeKey : "UNKNOWN";
+  const requestId = event && event.requestContext ? event.requestContext.requestId : undefined;
+  if (routeKey === "GET /health") {
+    return {
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "ok", routeKey, requestId })
+    };
+  }
+  return {
+    statusCode: 501,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      code: "ROUTE_NOT_IMPLEMENTED",
+      message: "Route integration is not wired yet.",
+      routeKey,
+      requestId
+    })
+  };
+};
+`)
+    });
   }
 
   private createOperationalAlarms(deploymentTarget: DeploymentTarget): void {
