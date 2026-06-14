@@ -112,7 +112,7 @@ export class AiAssistInfraStack extends cdk.Stack {
         cdk.Tags.of(table).add("ai-assist:default-ttl-hours", String(spec.defaultTtlHours));
       }
       if (spec.encryptedFields.length > 0) {
-        cdk.Tags.of(table).add("ai-assist:encrypted-fields", spec.encryptedFields.join(","));
+        cdk.Tags.of(table).add("ai-assist:encrypted-fields", formatTagListValue(spec.encryptedFields));
       }
       tables[spec.name] = table;
     }
@@ -303,6 +303,10 @@ function encryptionKeyPurposeForTable(spec: DynamoDbTableSpec): KmsPurpose | nul
     return KMS_PURPOSES.PROPOSED_ACTIONS;
   }
   return null;
+}
+
+function formatTagListValue(values: readonly string[]): string {
+  return values.join("+");
 }
 
 function keyId(purpose: string): string {

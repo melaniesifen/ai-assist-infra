@@ -75,6 +75,17 @@ test("synthesizes DynamoDB tables from the canonical table specs", () => {
       SSEType: "KMS"
     })
   });
+  template.hasResource("AWS::DynamoDB::Table", {
+    Properties: Match.objectLike({
+      TableName: "ai-assist-dev-us-west-2-OAuthTokens",
+      Tags: Match.arrayWith([
+        {
+          Key: "ai-assist:encrypted-fields",
+          Value: "encryptedAccessToken+encryptedRefreshToken"
+        }
+      ])
+    })
+  });
 });
 
 test("synthesizes KMS keys and aliases for every configured purpose", () => {
