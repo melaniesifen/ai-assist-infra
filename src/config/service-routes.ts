@@ -30,8 +30,10 @@ export interface ServiceRoute {
 
 export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
   route("GET", "/health", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
+  route("GET", "/auth/session", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("GET", "/auth/google/start", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
   route("GET", "/auth/google/callback", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
+  route("GET", "/setup/status", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("POST", "/provider-secrets/session", SERVICES.SECRETS, ROUTE_RATE_LIMIT_TIERS.EXPENSIVE),
   route("GET", "/provider-secrets/session/{provider}/status", SERVICES.SECRETS, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("DELETE", "/provider-secrets/session/{provider}", SERVICES.SECRETS, ROUTE_RATE_LIMIT_TIERS.MUTATION),
@@ -44,6 +46,7 @@ export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
   route("GET", "/context-modes", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("PUT", "/resource-sessions/{sessionId}/context-mode", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("POST", "/resource-sessions/{sessionId}/context-preview", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.EXPENSIVE),
+  route("GET", "/resource-sessions/{sessionId}/actions", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("POST", "/resource-sessions/{sessionId}/actions/{actionId}/approve", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("POST", "/resource-sessions/{sessionId}/actions/{actionId}/reject", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("POST", "/resource-sessions/{sessionId}/apply-action", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.MUTATION)

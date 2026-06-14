@@ -1,4 +1,4 @@
-import { buildEnvironmentResourceName, normalizeEnvironmentName } from "./environments";
+import { type DeploymentTarget, buildEnvironmentResourceName, buildTargetResourceName, normalizeEnvironmentName } from "./environments";
 
 export const KMS_PURPOSES = Object.freeze({
   OAUTH_TOKENS: "oauth-tokens",
@@ -48,4 +48,12 @@ export function getKmsAlias(environment: string, purpose: string): string {
   }
 
   return `alias/${buildEnvironmentResourceName(environment, `${purpose}-key`)}`;
+}
+
+export function getTargetKmsAlias(target: Pick<DeploymentTarget, "environmentName" | "region">, purpose: string): string {
+  if (!KMS_PURPOSE_MAPPING[purpose as KmsPurpose]) {
+    throw new Error(`unknown KMS purpose: ${purpose}`);
+  }
+
+  return `alias/${buildTargetResourceName(target, `${purpose}-key`)}`;
 }

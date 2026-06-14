@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 import * as cdk from "aws-cdk-lib";
+import { listDeploymentTargets } from "../src/config/environments";
 import { AiAssistInfraStack } from "../src/stacks/ai-assist-infra-stack";
 
 const app = new cdk.App();
-const environmentName = app.node.tryGetContext("environment") ?? process.env.AI_ASSIST_ENVIRONMENT ?? "dev";
 
-new AiAssistInfraStack(app, "AiAssistInfraStack", {
-  environmentName
-});
+for (const target of listDeploymentTargets()) {
+  new AiAssistInfraStack(app, target.stackName, {
+    deploymentTarget: target,
+    env: {
+      account: process.env[target.accountEnvVar] ?? target.fallbackAccount,
+      region: target.region
+    },
+    stackName: target.stackName
+  });
+}

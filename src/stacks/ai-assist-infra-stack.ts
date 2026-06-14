@@ -1,18 +1,22 @@
 import * as cdk from "aws-cdk-lib";
 import * as apigatewayv2 from "aws-cdk-lib/aws-apigatewayv2";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
-import { DYNAMODB_TABLES, DynamoDbTableSpec, listDynamoDbTableSpecs } from "../config/dynamodb-tables";
-import { buildEnvironmentResourceName, normalizeEnvironmentName } from "../config/environments";
+import { DynamoDbTableSpec, listDynamoDbTableSpecs } from "../config/dynamodb-tables";
+import { DeploymentTarget, ENVIRONMENTS, buildTargetResourceName, isProductionEnvironment, normalizeEnvironmentName } from "../config/environments";
 import { DYNAMODB_ACCESS_LEVELS, IAM_BOUNDARY_MATRIX, KMS_ACCESS_LEVELS } from "../config/iam-boundaries";
-import { KMS_PURPOSES, KmsPurpose, getKmsAlias, listKmsPurposeMappings } from "../config/kms-purposes";
+import { KMS_PURPOSES, KmsPurpose, getTargetKmsAlias, listKmsPurposeMappings } from "../config/kms-purposes";
+import { OPERATIONAL_ALARMS, OPERATIONAL_METRICS } from "../config/operational-guardrails";
 import { buildDefaultRouteRateLimits } from "../config/rate-limits";
 import { SERVICE_ROUTES } from "../config/service-routes";
 
 export interface AiAssistInfraStackProps extends cdk.StackProps {
   readonly environmentName?: string;
+  readonly deploymentTarget?: DeploymentTarget;
 }
 
 export class AiAssistInfraStack extends cdk.Stack {
@@ -23,11 +27,23 @@ export class AiAssistInfraStack extends cdk.Stack {
   public constructor(scope: Construct, id: string, props: AiAssistInfraStackProps = {}) {
     super(scope, id, props);
 
-    const environmentName = normalizeEnvironmentName(props.environmentName ?? "dev");
-    const keys = this.createKmsKeys(environmentName);
-    const tables = this.createDynamoDbTables(environmentName, keys);
-    const api = this.createHttpRouteInventory(environmentName);
+    const deploymentTarget = props.deploymentTarget ?? {
+      environmentName: normalizeEnvironmentName(props.environmentName ?? ENVIRONMENTS.DEV),
+      accountEnvVar: "CDK_DEFAULT_ACCOUNT",
+      region: "us-west-2",
+      stackName: id,
+      removalProtection: isProductionEnvironment(props.environmentName ?? ENVIRONMENTS.DEV),
+      logRetentionDays: isProductionEnvironment(props.environmentName ?? ENVIRONMENTS.DEV) ? 365 : 30
+    };
+    const environmentName = normalizeEnvironmentName(deploymentTarget.environmentName);
+    const keys = this.createKmsKeys(deploymentTarget);
+    const tables = this.createDynamoDbTables(deploymentTarget, keys);
+    const api = this.createHttpRouteInventory(deploymentTarget);
     const serviceRoles = this.createServiceRoles(tables, keys);
+    this.createOperationalAlarms(deploymentTarget);
+
+    cdk.Tags.of(this).add("ai-assist:environment", environmentName);
+    cdk.Tags.of(this).add("ai-assist:region", deploymentTarget.region);
 
     this.tables = tables;
     this.keys = keys;
@@ -36,18 +52,23 @@ export class AiAssistInfraStack extends cdk.Stack {
     new cdk.CfnOutput(this, "HttpApiId", {
       value: api.ref
     });
+    new cdk.CfnOutput(this, "EnvironmentName", {
+      value: environmentName
+    });
   }
 
-  private createKmsKeys(environmentName: string): Record<KmsPurpose, kms.Key> {
+  private createKmsKeys(deploymentTarget: DeploymentTarget): Record<KmsPurpose, kms.Key> {
     const keys = {} as Record<KmsPurpose, kms.Key>;
     for (const mapping of listKmsPurposeMappings()) {
       const key = new kms.Key(this, keyId(mapping.purpose), {
-        alias: getKmsAlias(environmentName, mapping.purpose),
+        alias: getTargetKmsAlias(deploymentTarget, mapping.purpose),
         description: mapping.description,
-        enableKeyRotation: true
+        enableKeyRotation: true,
+        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
       });
 
-      cdk.Tags.of(key).add("ai-assist:environment", environmentName);
+      cdk.Tags.of(key).add("ai-assist:environment", deploymentTarget.environmentName);
+      cdk.Tags.of(key).add("ai-assist:region", deploymentTarget.region);
       cdk.Tags.of(key).add("ai-assist:kms-purpose", mapping.purpose);
       cdk.Tags.of(key).add("ai-assist:owning-service", mapping.owningService);
       if (mapping.optional) {
@@ -58,11 +79,11 @@ export class AiAssistInfraStack extends cdk.Stack {
     return keys;
   }
 
-  private createDynamoDbTables(environmentName: string, keys: Record<KmsPurpose, kms.Key>): Record<string, dynamodb.Table> {
+  private createDynamoDbTables(deploymentTarget: DeploymentTarget, keys: Record<KmsPurpose, kms.Key>): Record<string, dynamodb.Table> {
     const tables: Record<string, dynamodb.Table> = {};
     for (const spec of listDynamoDbTableSpecs()) {
       const table = new dynamodb.Table(this, tableId(spec), {
-        tableName: buildEnvironmentResourceName(environmentName, spec.name),
+        tableName: buildTargetResourceName(deploymentTarget, spec.name),
         partitionKey: {
           name: spec.partitionKey,
           type: dynamodb.AttributeType.STRING
@@ -77,10 +98,12 @@ export class AiAssistInfraStack extends cdk.Stack {
         billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
         encryption: encryptionForTable(spec),
         encryptionKey: encryptionKeyForTable(spec, keys),
-        removalPolicy: environmentName === "prod" ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+        deletionProtection: deploymentTarget.removalProtection,
+        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
       });
 
-      cdk.Tags.of(table).add("ai-assist:environment", environmentName);
+      cdk.Tags.of(table).add("ai-assist:environment", deploymentTarget.environmentName);
+      cdk.Tags.of(table).add("ai-assist:region", deploymentTarget.region);
       cdk.Tags.of(table).add("ai-assist:table-spec", spec.name);
       if (spec.optional) {
         cdk.Tags.of(table).add("ai-assist:optional", "true");
@@ -96,11 +119,16 @@ export class AiAssistInfraStack extends cdk.Stack {
     return tables;
   }
 
-  private createHttpRouteInventory(environmentName: string): apigatewayv2.CfnApi {
+  private createHttpRouteInventory(deploymentTarget: DeploymentTarget): apigatewayv2.CfnApi {
     const api = new apigatewayv2.CfnApi(this, "HttpApi", {
-      name: buildEnvironmentResourceName(environmentName, "http-api"),
+      name: buildTargetResourceName(deploymentTarget, "http-api"),
       protocolType: "HTTP",
       description: "MVP HTTP command and SSE route inventory for AI Assist."
+    });
+    const accessLogGroup = new logs.LogGroup(this, "HttpApiAccessLogGroup", {
+      logGroupName: `/aws/apigateway/${buildTargetResourceName(deploymentTarget, "http-api-access")}`,
+      retention: retentionDays(deploymentTarget.logRetentionDays),
+      removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
     });
 
     const defaultLimits = buildDefaultRouteRateLimits();
@@ -111,6 +139,17 @@ export class AiAssistInfraStack extends cdk.Stack {
       defaultRouteSettings: {
         throttlingBurstLimit: Math.max(...Object.values(defaultLimits).map((limit) => limit.burst)),
         throttlingRateLimit: Math.max(...Object.values(defaultLimits).map((limit) => limit.requestsPerMinute)) / 60
+      },
+      accessLogSettings: {
+        destinationArn: accessLogGroup.logGroupArn,
+        format: JSON.stringify({
+          requestId: "$context.requestId",
+          routeKey: "$context.routeKey",
+          status: "$context.status",
+          responseLatency: "$context.responseLatency",
+          integrationStatus: "$context.integrationStatus",
+          errorMessage: "$context.error.message"
+        })
       },
       routeSettings: Object.fromEntries(
         Object.entries(defaultLimits).map(([routeKey, limit]) => [
@@ -137,6 +176,39 @@ export class AiAssistInfraStack extends cdk.Stack {
     }
 
     return api;
+  }
+
+  private createOperationalAlarms(deploymentTarget: DeploymentTarget): void {
+    const dashboard = new cloudwatch.Dashboard(this, "OperationsDashboard", {
+      dashboardName: buildTargetResourceName(deploymentTarget, "operations-dashboard")
+    });
+    const dashboardMetrics: cloudwatch.Metric[] = [];
+    for (const alarmConfig of OPERATIONAL_ALARMS) {
+      const metricConfig = OPERATIONAL_METRICS.find((candidate) => candidate.metricName === alarmConfig.metricName);
+      const metric = new cloudwatch.Metric({
+        namespace: "AiAssist",
+        metricName: alarmConfig.metricName,
+        dimensionsMap: {
+          Environment: deploymentTarget.environmentName,
+          Path: alarmConfig.path
+        },
+        unit: metricConfig?.unit === "Milliseconds" ? cloudwatch.Unit.MILLISECONDS : cloudwatch.Unit.COUNT,
+        period: cdk.Duration.minutes(5)
+      });
+      dashboardMetrics.push(metric);
+      new cloudwatch.Alarm(this, alarmId(alarmConfig.metricName), {
+        alarmName: buildTargetResourceName(deploymentTarget, `${alarmConfig.metricName}-alarm`),
+        metric,
+        threshold: alarmConfig.threshold,
+        evaluationPeriods: alarmConfig.evaluationPeriods,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING
+      });
+    }
+    dashboard.addWidgets(new cloudwatch.GraphWidget({
+      title: "Trusted-user operational guardrails",
+      left: dashboardMetrics
+    }));
   }
 
   private createServiceRoles(tables: Record<string, dynamodb.Table>, keys: Record<KmsPurpose, kms.Key>): Record<string, iam.Role> {
@@ -247,6 +319,17 @@ function serviceRoleId(service: string): string {
 
 function routeConstructId(routeKey: string): string {
   return `${toPascalCase(routeKey.replace(/[{}]/g, ""))}Route`;
+}
+
+function alarmId(metricName: string): string {
+  return `${toPascalCase(metricName)}Alarm`;
+}
+
+function retentionDays(days: number): logs.RetentionDays {
+  if (days >= 365) {
+    return logs.RetentionDays.ONE_YEAR;
+  }
+  return logs.RetentionDays.ONE_MONTH;
 }
 
 function toPascalCase(value: string): string {
