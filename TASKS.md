@@ -20,11 +20,11 @@ Relevant LLDs:
 - [x] ACTION-001: Define `ProposedActions` table spec with tenant scope, action metadata, 24-hour TTL, and encrypted payload field.
 - [x] AUTH-004: Define `SessionSecrets` table spec with tenant/user/provider scope, encrypted secret field, fingerprint, validation timestamp, and 8-hour TTL.
 - [x] CTX-002: Define `ContextConsentGrants` table spec with tenant/user/provider/context mode scope and expiry fields.
-- [x] AUTH-006: Define KMS purpose mapping for session secrets, OAuth tokens, proposed actions, and optional user secrets.
+- [x] AUTH-006: Define KMS purpose mapping for session secrets, OAuth tokens, proposed actions, and optional user secrets; current deployable MVP maps those purposes to one shared app key per deployment target.
 - [x] AUTH-006: Define least-privilege IAM boundary documentation helpers by service, table, and KMS purpose.
 - [x] OPS-001: Define route rate-limit tiers and validation for required MVP routes.
 - [x] INFRA-002: Define DynamoDB table specs for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session events.
-- [x] INFRA-003: Define KMS alias strategy by environment and data class.
+- [x] INFRA-003: Define KMS alias strategy by environment. Current deployable MVP uses one rotated `app-key` alias per deployment target while retaining purpose metadata for IAM boundaries and future split-key migration.
 - [x] Add unit tests for environments, route inventory, DynamoDB table specs, KMS purposes, rate-limit validation, and IAM boundary docs.
 - [x] Reach at least 95% line coverage.
 - [x] Document test and coverage commands in `README.md`.
@@ -36,7 +36,7 @@ Relevant LLDs:
 - Migration gate: Do not continue broad new feature work until the TypeScript CDK migration is completed or explicitly deferred.
 - [x] REPO-001: Decide final infra language, CDK language, package manager, app layout, migration cost, deployment target, local workflow, and assertion-test strategy.
 - [x] REPO-002: Migrate infrastructure to a TypeScript CDK app with equivalent route inventory, DynamoDB table specs, KMS purpose mapping, IAM boundary coverage, rate-limit configuration, assertion tests, synth workflow, and repo docs.
-- [x] AUTH-006: Convert KMS purpose and IAM boundary helpers into deployable least-privilege IAM roles and KMS grants. Infra owns this slice because the workspace task requires deployable KMS keys, key policies, IAM roles, and grants; service repos still own application authorization and typed dependency-error handling.
+- [x] AUTH-006: Convert KMS purpose and IAM boundary helpers into deployable least-privilege IAM roles and KMS grants. Infra owns this slice because the workspace task requires deployable KMS key policy, IAM roles, and grants; service repos still own application authorization and typed dependency-error handling. Current MVP uses one shared customer-managed app key per target for cost control.
 - [ ] EVT-001: Implement API Gateway HTTP command routes with authentication integration and request/correlation ID propagation. Infra owns the edge route, authorizer wiring, and request/correlation ID propagation plumbing; command semantics remain owned by the service repos and shared contracts. Current M8-T6 state: deployable route inventory is synthesized; service integrations and authorizers remain follow-up wiring.
 - [ ] EVT-003: Implement SSE-capable service or Lambda path and edge route for session event streaming. Infra owns the deployable streaming path and edge route; session event payload contracts and publishing semantics remain owned by contracts, session-events, and orchestration repos. Current M8-T6 state: deployable SSE route inventory is synthesized; streaming integration remains follow-up wiring.
 - [x] OPS-001: Implement API Gateway throttling and optional WAF rate-based rules for auth, OAuth, provider-key validation, command creation, context preview, SSE stream creation, and apply-action.
@@ -44,7 +44,7 @@ Relevant LLDs:
 - [x] OPS-003: Configure metadata-only logging defaults and disable request/response body logging on sensitive routes.
 - [x] OPS-004: Add CloudWatch metrics, dashboards, and alarms for latency, error categories, dependency failures, provider usage, throttling, KMS failures, OAuth failures, action conflicts, and apply failures.
 - [x] OPS-005: Add runbook skeletons for provider outage/quota, Google OAuth revocation spike, KMS failure, SSE stream failure, rate-limit misconfiguration, and repeated action conflicts.
-- [x] INFRA-001: Build AWS MVP stack with HTTP API, SSE-capable route, DynamoDB, KMS, CloudWatch logs/metrics, service IAM roles, configurable rate limits, configurable TTLs, and optional WAF. Infra owns this workspace definition task because it is the deployable AWS stack shape that assembles shared service prerequisites without owning service business logic.
+- [x] INFRA-001: Build AWS MVP stack with HTTP API, SSE-capable route, DynamoDB, one shared app KMS key per deployment target, CloudWatch logs/metrics, service IAM roles, configurable rate limits, configurable TTLs, and optional WAF. Infra owns this workspace definition task because it is the deployable AWS stack shape that assembles shared service prerequisites without owning service business logic.
 - [x] INFRA-001: Exclude WebSocket API Gateway and connection registry from MVP infrastructure. Infra owns this negative requirement because the MVP stack must keep WebSocket resources out until a later transport decision adds them.
 - [ ] INFRA-002: Document DynamoDB access patterns before creating tables.
 - [x] INFRA-003: Document KMS key rotation strategy at least at a high level.

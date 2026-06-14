@@ -1,5 +1,7 @@
 import { type DeploymentTarget, buildEnvironmentResourceName, buildTargetResourceName, normalizeEnvironmentName } from "./environments";
 
+export const SHARED_KMS_KEY_SUFFIX = "app-key";
+
 export const KMS_PURPOSES = Object.freeze({
   OAUTH_TOKENS: "oauth-tokens",
   SESSION_SECRETS: "session-secrets",
@@ -47,7 +49,7 @@ export function getKmsAlias(environment: string, purpose: string): string {
     throw new Error(`unknown KMS purpose: ${purpose}`);
   }
 
-  return `alias/${buildEnvironmentResourceName(environment, `${purpose}-key`)}`;
+  return getSharedKmsAlias(environment);
 }
 
 export function getTargetKmsAlias(target: Pick<DeploymentTarget, "environmentName" | "region">, purpose: string): string {
@@ -55,5 +57,13 @@ export function getTargetKmsAlias(target: Pick<DeploymentTarget, "environmentNam
     throw new Error(`unknown KMS purpose: ${purpose}`);
   }
 
-  return `alias/${buildTargetResourceName(target, `${purpose}-key`)}`;
+  return getTargetSharedKmsAlias(target);
+}
+
+export function getSharedKmsAlias(environment: string): string {
+  return `alias/${buildEnvironmentResourceName(environment, SHARED_KMS_KEY_SUFFIX)}`;
+}
+
+export function getTargetSharedKmsAlias(target: Pick<DeploymentTarget, "environmentName" | "region">): string {
+  return `alias/${buildTargetResourceName(target, SHARED_KMS_KEY_SUFFIX)}`;
 }

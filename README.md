@@ -10,7 +10,7 @@ DynamoDB, KMS, IAM boundary, and rate-limit contracts.
 ## Current Contents
 
 - `bin/ai-assist-infra.ts`: CDK app entry point.
-- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP/SSE route inventory, DynamoDB tables, KMS keys, IAM roles, and default API throttling.
+- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP/SSE route inventory, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
 - `src/config/*.ts`: typed deployment target, runtime config, route, DynamoDB, KMS, rate-limit, IAM boundary, and operational guardrail inventories.
 - `test/*.test.ts`: Node built-in tests plus CDK assertion tests.
 - `cdk.json`, `tsconfig.json`, `package.json`, and `package-lock.json`: repo-local CDK and TypeScript tooling.
@@ -19,7 +19,7 @@ DynamoDB, KMS, IAM boundary, and rate-limit contracts.
 
 The current CDK app creates:
 
-- KMS keys and aliases for OAuth tokens, session secrets, proposed actions, and future user secrets.
+- One shared customer-managed KMS app key and alias per deployment target for OAuth tokens, session secrets, proposed actions, and future user secrets.
 - DynamoDB tables for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session event replay metadata.
 - HTTP API route inventory for MVP command routes and the SSE session event route.
 - Service IAM roles with table and KMS grants derived from the IAM boundary matrix.
@@ -48,6 +48,13 @@ stack code. Deployable resource names include environment and region, for
 example `ai-assist-dev-us-west-2-http-api`, so KMS aliases, DynamoDB table
 names, API names, log groups, IAM role names, outputs, and future global
 resources have stage-safe and region-safe prefixes.
+
+KMS is intentionally cost-conscious for the trusted-user MVP: each deployment
+target creates one rotated customer-managed key, for example
+`alias/ai-assist-dev-us-west-2-app-key`. The typed KMS purpose inventory is
+still retained for IAM boundary documentation and future split-key migration,
+but all current encrypted tables and service grants resolve to the shared app
+key.
 
 ## Route Inventory
 
@@ -110,7 +117,7 @@ For local development:
 Deployment order for a real-flow environment:
 
 1. Validate shared contracts and service route expectations.
-2. Deploy or synth infra tables, KMS keys, route inventory, logs, metrics, and
+2. Deploy or synth infra tables, the shared KMS app key, route inventory, logs, metrics, and
    alarms.
 3. Start or deploy auth, secrets, context, Google Docs adapter, session events,
    orchestration, and provider adapter services with the config keys above.

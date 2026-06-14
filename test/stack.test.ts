@@ -88,15 +88,22 @@ test("synthesizes DynamoDB tables from the canonical table specs", () => {
   });
 });
 
-test("synthesizes KMS keys and aliases for every configured purpose", () => {
+test("synthesizes one shared KMS app key for all configured purposes", () => {
   const template = synthTemplate();
 
-  template.resourceCountIs("AWS::KMS::Key", listKmsPurposeMappings().length);
+  template.resourceCountIs("AWS::KMS::Key", 1);
+  template.resourceCountIs("AWS::KMS::Alias", 1);
   template.hasResourceProperties("AWS::KMS::Alias", {
-    AliasName: "alias/ai-assist-dev-us-west-2-session-secrets-key"
+    AliasName: "alias/ai-assist-dev-us-west-2-app-key"
   });
   template.hasResourceProperties("AWS::KMS::Key", {
-    EnableKeyRotation: true
+    EnableKeyRotation: true,
+    Tags: Match.arrayWith([
+      {
+        Key: "ai-assist:kms-purposes",
+        Value: listKmsPurposeMappings().map((mapping) => mapping.purpose).join("+")
+      }
+    ])
   });
 });
 
@@ -174,6 +181,10 @@ test("synthesizes service roles and scoped IAM policy statements", () => {
   assert.ok(Object.keys(roles).length >= 6);
   assert.ok(JSON.stringify(policies).includes("dynamodb:PutItem"));
   assert.ok(JSON.stringify(policies).includes("kms:Decrypt"));
+  assert.equal(JSON.stringify(policies).includes("session-secrets-key"), false);
+  assert.equal(JSON.stringify(policies).includes("oauth-tokens-key"), false);
+  assert.equal(JSON.stringify(policies).includes("proposed-actions-key"), false);
+  assert.ok(JSON.stringify(rendered).includes("app-key"));
   assert.ok(JSON.stringify(policies).includes("SessionSecretsTable"));
   assert.ok(JSON.stringify(authPolicy).includes("dynamodb:PutItem"));
   assert.ok(JSON.stringify(authPolicy).includes("kms:Encrypt"));

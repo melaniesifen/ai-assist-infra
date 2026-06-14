@@ -77,9 +77,10 @@ test("can exclude optional session event table from pure inventory views", () =>
   assert.equal(names.includes("ResourceSessions"), true);
 });
 
-test("keeps KMS aliases purpose-specific and optional mappings filterable", () => {
-  assert.equal(getKmsAlias("prod", KMS_PURPOSES.SESSION_SECRETS), "alias/ai-assist-prod-session-secrets-key");
-  assert.equal(getTargetKmsAlias(listDeploymentTargets()[0], KMS_PURPOSES.SESSION_SECRETS), "alias/ai-assist-dev-us-west-2-session-secrets-key");
+test("keeps KMS purpose validation while resolving to one shared app key", () => {
+  assert.equal(getKmsAlias("prod", KMS_PURPOSES.OAUTH_TOKENS), "alias/ai-assist-prod-app-key");
+  assert.equal(getKmsAlias("prod", KMS_PURPOSES.SESSION_SECRETS), "alias/ai-assist-prod-app-key");
+  assert.equal(getTargetKmsAlias(listDeploymentTargets()[0], KMS_PURPOSES.SESSION_SECRETS), "alias/ai-assist-dev-us-west-2-app-key");
   assert.equal(listKmsPurposeMappings({ includeOptional: false }).some((item) => item.purpose === KMS_PURPOSES.USER_SECRETS), false);
   assert.throws(() => getKmsAlias("dev", "raw-content"), /unknown KMS purpose/);
 });

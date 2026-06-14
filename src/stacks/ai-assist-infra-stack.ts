@@ -10,7 +10,7 @@ import { Construct } from "constructs";
 import { DynamoDbTableSpec, listDynamoDbTableSpecs } from "../config/dynamodb-tables";
 import { DeploymentTarget, ENVIRONMENTS, buildTargetResourceName, isProductionEnvironment, normalizeEnvironmentName } from "../config/environments";
 import { DYNAMODB_ACCESS_LEVELS, IAM_BOUNDARY_MATRIX, KMS_ACCESS_LEVELS } from "../config/iam-boundaries";
-import { KMS_PURPOSES, KmsPurpose, getTargetKmsAlias, listKmsPurposeMappings } from "../config/kms-purposes";
+import { KMS_PURPOSES, KmsPurpose, getTargetSharedKmsAlias, listKmsPurposeMappings } from "../config/kms-purposes";
 import { OPERATIONAL_ALARMS, OPERATIONAL_METRICS } from "../config/operational-guardrails";
 import { buildDefaultRouteRateLimits } from "../config/rate-limits";
 import { SERVICE_ROUTES } from "../config/service-routes";
@@ -59,25 +59,22 @@ export class AiAssistInfraStack extends cdk.Stack {
   }
 
   private createKmsKeys(deploymentTarget: DeploymentTarget): Record<KmsPurpose, kms.Key> {
-    const keys = {} as Record<KmsPurpose, kms.Key>;
-    for (const mapping of listKmsPurposeMappings()) {
-      const key = new kms.Key(this, keyId(mapping.purpose), {
-        alias: getTargetKmsAlias(deploymentTarget, mapping.purpose),
-        description: mapping.description,
-        enableKeyRotation: true,
-        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
-      });
+    const mappings = listKmsPurposeMappings();
+    const coveredPurposes = mappings.map((mapping) => mapping.purpose);
+    const owningServices = [...new Set(mappings.map((mapping) => mapping.owningService))].sort();
+    const sharedKey = new kms.Key(this, "AppKey", {
+      alias: getTargetSharedKmsAlias(deploymentTarget),
+      description: "Shared AI Assist app encryption key for OAuth tokens, session secrets, proposed actions, and opt-in user secrets.",
+      enableKeyRotation: true,
+      removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+    });
 
-      cdk.Tags.of(key).add("ai-assist:environment", deploymentTarget.environmentName);
-      cdk.Tags.of(key).add("ai-assist:region", deploymentTarget.region);
-      cdk.Tags.of(key).add("ai-assist:kms-purpose", mapping.purpose);
-      cdk.Tags.of(key).add("ai-assist:owning-service", mapping.owningService);
-      if (mapping.optional) {
-        cdk.Tags.of(key).add("ai-assist:optional", "true");
-      }
-      keys[mapping.purpose] = key;
-    }
-    return keys;
+    cdk.Tags.of(sharedKey).add("ai-assist:environment", deploymentTarget.environmentName);
+    cdk.Tags.of(sharedKey).add("ai-assist:region", deploymentTarget.region);
+    cdk.Tags.of(sharedKey).add("ai-assist:kms-purposes", formatTagListValue(coveredPurposes));
+    cdk.Tags.of(sharedKey).add("ai-assist:owning-services", formatTagListValue(owningServices));
+
+    return Object.fromEntries(coveredPurposes.map((purpose) => [purpose, sharedKey])) as Record<KmsPurpose, kms.Key>;
   }
 
   private createDynamoDbTables(deploymentTarget: DeploymentTarget, keys: Record<KmsPurpose, kms.Key>): Record<string, dynamodb.Table> {
@@ -367,10 +364,6 @@ function encryptionKeyPurposeForTable(spec: DynamoDbTableSpec): KmsPurpose | nul
 
 function formatTagListValue(values: readonly string[]): string {
   return values.join("+");
-}
-
-function keyId(purpose: string): string {
-  return `${toPascalCase(purpose)}Key`;
 }
 
 function tableId(spec: DynamoDbTableSpec): string {
