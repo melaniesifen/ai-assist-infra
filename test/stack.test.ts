@@ -13,8 +13,16 @@ const TEST_DEPLOYMENT_CONFIG = {
   hostedZoneId: "Z1234567890ABC",
   hostedZoneName: "example.test",
   sseDomainName: "sse.dev.example.test",
+  edgeJwtAuthEnabled: true,
   productAuthIssuer: "https://auth.test.example/",
   productAuthAudience: "ai-assist-test"
+};
+
+const TEST_DEV_EDGE_AUTH_DISABLED_CONFIG = {
+  ...TEST_DEPLOYMENT_CONFIG,
+  edgeJwtAuthEnabled: false,
+  productAuthIssuer: "",
+  productAuthAudience: ""
 };
 
 function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): Template {
@@ -22,6 +30,20 @@ function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): T
   const stack = new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
     deploymentConfig: TEST_DEPLOYMENT_CONFIG,
+    stackName: target.stackName,
+    env: {
+      account: "111111111111",
+      region: target.region
+    }
+  });
+  return Template.fromStack(stack);
+}
+
+function synthTemplateWithDeploymentConfig(deploymentConfig: typeof TEST_DEPLOYMENT_CONFIG, target: DeploymentTarget = listDeploymentTargets()[0]): Template {
+  const app = new cdk.App();
+  const stack = new AiAssistInfraStack(app, target.stackName, {
+    deploymentTarget: target,
+    deploymentConfig,
     stackName: target.stackName,
     env: {
       account: "111111111111",
@@ -181,11 +203,9 @@ test("synthesizes the HTTP and SSE route inventory", () => {
   template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
     StageName: "$default",
     AutoDeploy: true,
-    RouteSettings: Match.objectLike({
-      "POST /resource-sessions/{sessionId}/commands": {
-        ThrottlingBurstLimit: 5,
-        ThrottlingRateLimit: 20 / 60
-      }
+    DefaultRouteSettings: Match.objectLike({
+      ThrottlingBurstLimit: Match.anyValue(),
+      ThrottlingRateLimit: Match.anyValue()
     }),
     AccessLogSettings: Match.objectLike({
       Format: Match.serializedJson(Match.objectLike({
@@ -194,6 +214,23 @@ test("synthesizes the HTTP and SSE route inventory", () => {
         status: "$context.status"
       }))
     })
+  });
+  const rendered = template.toJSON();
+  const stageResource = Object.values(rendered.Resources as Record<string, { readonly Type: string; readonly Properties: Record<string, unknown> }>).find(
+    (resource) => resource.Type === "AWS::ApiGatewayV2::Stage"
+  );
+  assert.ok(stageResource);
+  assert.equal("RouteSettings" in stageResource.Properties, false);
+});
+
+test("can disable API Gateway edge JWT only for dev infra health deploys", () => {
+  const template = synthTemplateWithDeploymentConfig(TEST_DEV_EDGE_AUTH_DISABLED_CONFIG);
+
+  template.resourceCountIs("AWS::ApiGatewayV2::Authorizer", 0);
+  template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
+    RouteKey: "POST /resource-sessions/{sessionId}/commands",
+    AuthorizationType: "NONE",
+    Target: Match.anyValue()
   });
 });
 
@@ -232,6 +269,13 @@ test("synthesizes Fargate service runtimes and public ALB SSE hosting", () => {
   template.hasResourceProperties("AWS::ECS::Service", {
     ServiceName: "ai-assist-dev-us-west-2-ai-assist-auth-service",
     PlatformVersion: "LATEST"
+  });
+  template.hasResourceProperties("AWS::ECS::TaskDefinition", {
+    RuntimePlatform: {
+      CpuArchitecture: "ARM64",
+      OperatingSystemFamily: "LINUX"
+    },
+    RequiresCompatibilities: ["FARGATE"]
   });
   template.hasResourceProperties("AWS::ECS::TaskDefinition", {
     ContainerDefinitions: Match.arrayWith([

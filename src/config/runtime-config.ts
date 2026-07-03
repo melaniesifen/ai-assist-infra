@@ -67,6 +67,9 @@ export function validateRuntimeConfig(config: Record<string, string | undefined>
     if (["WEB_APP_BASE_URL", "API_BASE_URL", "SSE_BASE_URL", "GOOGLE_OAUTH_CALLBACK_URL"].includes(entry.name)) {
       validateHttpsUrl(entry.name, value, invalid);
     }
+    if (entry.name === "GOOGLE_OAUTH_CALLBACK_URL") {
+      validateRequiredPath(entry.name, value, "/oauth/google/callback", invalid);
+    }
     if (entry.name === "ALLOWED_ORIGINS") {
       validateCorsOrigins(value, invalid);
     }
@@ -100,6 +103,17 @@ function validateHttpsUrl(name: string, value: string, invalid: string[]): void 
     const url = new URL(value);
     if (url.protocol !== "https:") {
       invalid.push(`${name} must use https`);
+    }
+  } catch {
+    invalid.push(`${name} must be a valid URL`);
+  }
+}
+
+function validateRequiredPath(name: string, value: string, expectedPath: string, invalid: string[]): void {
+  try {
+    const url = new URL(value);
+    if (url.pathname !== expectedPath) {
+      invalid.push(`${name} must use ${expectedPath}`);
     }
   } catch {
     invalid.push(`${name} must be a valid URL`);

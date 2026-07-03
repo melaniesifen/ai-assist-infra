@@ -4,6 +4,7 @@
       "hostedZoneId": "Z1234567890ABC",
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.dev.example.test",
+      "edgeJwtAuthEnabled": false,
       "productAuthIssuer": "https://auth.dev.example.test/",
       "productAuthAudience": "ai-assist-dev"
     },
@@ -11,6 +12,7 @@
       "hostedZoneId": "Z1234567890ABC",
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.gamma.example.test",
+      "edgeJwtAuthEnabled": true,
       "productAuthIssuer": "https://auth.gamma.example.test/",
       "productAuthAudience": "ai-assist-gamma"
     },
@@ -18,6 +20,7 @@
       "hostedZoneId": "Z1234567890ABC",
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.example.test",
+      "edgeJwtAuthEnabled": true,
       "productAuthIssuer": "https://auth.example.test/",
       "productAuthAudience": "ai-assist-prod"
     }

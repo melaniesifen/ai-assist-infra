@@ -65,22 +65,35 @@ key.
 
 The typed route inventory covers:
 
-- product session: `GET /auth/session`
-- Google OAuth: `GET /auth/google/start`, `GET /auth/google/callback`
+- product auth/session: `POST /auth/login`, `POST /auth/logout`, `GET /auth/session`
+- Google OAuth: `POST /oauth/google/start`, `GET /oauth/google/callback`,
+  `GET /oauth/google/status`, `DELETE /oauth/google/connection`
 - setup status: `GET /setup/status`
 - provider availability and BYO session-secret status
 - Google Docs resource listing
 - resource-session create/read
 - context mode and context preview
 - command creation
-- SSE events on the public ALB: `GET /resource-sessions/{sessionId}/events`
+- SSE events on the public ALB: `GET /sessions/{sessionId}/events`
 - action review: `GET /resource-sessions/{sessionId}/actions`, approve, reject
 - apply-action: `POST /resource-sessions/{sessionId}/apply-action`
 
 HTTP command routes synthesize with API Gateway JWT authorization, VPC link
 integrations, request/correlation ID header propagation, and private ALB
-listeners per owning service. Owning service repos still own command behavior,
-service-side authZ, SSE event payloads, and action state transitions.
+listeners per owning service. The only API Gateway product-route edge auth
+exceptions are `POST /auth/login` and `GET /oauth/google/callback`: login is
+the trusted-user bootstrap boundary, and the Google callback cannot carry the
+browser's bearer token from Google's redirect. The auth service must validate
+the signed OAuth state, replay guard, tenant/user binding, and callback URL
+before accepting callback traffic. `GET /health` is the only intentionally
+placeholder-backed route.
+
+The CDK JWT authorizer requires a product auth issuer and audience from ignored
+deployment context. The issuer must be an HTTPS OIDC-compatible issuer whose
+JWKS is discoverable by API Gateway from the issuer metadata; the audience must
+match the bearer tokens used by trusted users. This repo only wires the edge
+authorizer. Owning service repos still own command behavior, service-side
+authZ, session validation, SSE event payloads, and action state transitions.
 
 The public SSE ALB uses HTTPS, a 900 second idle timeout, session-events
 Fargate tasks, service logs, health checks, and generic SSE config:
@@ -117,6 +130,7 @@ CloudFormation parameters:
 HostedZoneId
 HostedZoneName
 SseDomainName
+EdgeJwtAuthEnabled
 ProductAuthIssuer
 ProductAuthAudience
 ```
@@ -127,6 +141,13 @@ the hosted zone values to request an ACM certificate, create DNS validation, and
 create the Route 53 alias record for the public SSE load balancer. These values
 are not service secrets, but they are account/environment-specific and should
 stay out of source control.
+
+`edgeJwtAuthEnabled` defaults to `true`. It may be set to `false` only for the
+`dev` target to run an infrastructure health deploy before a real product auth
+issuer exists. That bypass removes the API Gateway JWT authorizer and leaves
+API Gateway routes unauthenticated at the edge. It must not be used as evidence
+that the trusted-user product loop is dogfood-ready; Cognito or another real
+product auth issuer is still required before personal end-to-end use.
 
 Security notes:
 
@@ -147,6 +168,7 @@ Example local context shape:
       "hostedZoneId": "Z1234567890ABC",
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.dev.example.test",
+      "edgeJwtAuthEnabled": false,
       "productAuthIssuer": "https://auth.dev.example.test/",
       "productAuthAudience": "ai-assist-dev"
     }
@@ -199,10 +221,11 @@ TRUSTED_USER_MODE
 ```
 
 Public URL and callback URL values must use HTTPS for deployable trusted-user
-stacks. `TRUSTED_USER_MODE` must be `true`. Secret-bearing values are
-references such as ARNs or aliases, not plaintext credentials. Service task
-definitions receive resource-derived table names and the shared app KMS key
-reference from the stack.
+stacks, and `GOOGLE_OAUTH_CALLBACK_URL` must resolve to
+`${API_BASE_URL}/oauth/google/callback`. `TRUSTED_USER_MODE` must be `true`.
+Secret-bearing values are references such as ARNs or aliases, not plaintext
+credentials. Service task definitions receive resource-derived table names and
+the shared app KMS key reference from the stack.
 
 For local development:
 
@@ -210,7 +233,7 @@ For local development:
 2. Set the config keys above to local or deployed service endpoints as
    appropriate for the trusted-user run.
 3. Run `npm test` to validate config inventory and stack assertions.
-4. Run `npm run synth` to synthesize both `dev` and `prod`.
+4. Run `npm run synth` to synthesize `dev`, `gamma`, and `prod`.
 
 Deployment order for a real-flow environment:
 

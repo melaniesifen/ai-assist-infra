@@ -64,6 +64,7 @@ test("parses local deployment config from CDK context without exposing secrets",
         hostedZoneId: "Z1234567890ABC",
         hostedZoneName: "example.test",
         sseDomainName: "sse.dev.example.test",
+        edgeJwtAuthEnabled: true,
         productAuthIssuer: "https://auth.dev.example.test/",
         productAuthAudience: "ai-assist-dev"
       }
@@ -73,6 +74,21 @@ test("parses local deployment config from CDK context without exposing secrets",
 
   assert.equal(config.productAuthAudience, "ai-assist-dev");
   assert.equal(config.productAuthIssuer, "https://auth.dev.example.test/");
+  assert.equal(config.edgeJwtAuthEnabled, true);
+  assert.equal(
+    parseDeploymentConfigContext(
+      {
+        dev: {
+          hostedZoneId: "Z1234567890ABC",
+          hostedZoneName: "example.test",
+          sseDomainName: "sse.dev.example.test",
+          edgeJwtAuthEnabled: false
+        }
+      },
+      "dev"
+    ).edgeJwtAuthEnabled,
+    false
+  );
   assert.throws(() => parseDeploymentConfigContext({}, "dev"), new RegExp(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.dev is required`));
   assert.throws(
     () =>
@@ -82,6 +98,7 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneId: "not-a-zone-id",
             hostedZoneName: "example.test",
             sseDomainName: "sse.dev.example.test",
+            edgeJwtAuthEnabled: true,
             productAuthIssuer: "http://auth.dev.example.test/",
             productAuthAudience: "ai-assist-dev"
           }
@@ -98,6 +115,7 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneId: "Z1234567890ABC",
             hostedZoneName: "example.test",
             sseDomainName: "sse.other.test",
+            edgeJwtAuthEnabled: true,
             productAuthIssuer: "https://auth.dev.example.test/",
             productAuthAudience: "ai-assist-dev"
           }
@@ -105,6 +123,21 @@ test("parses local deployment config from CDK context without exposing secrets",
         "dev"
       ),
     /sseDomainName must be a subdomain of hostedZoneName/
+  );
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          gamma: {
+            hostedZoneId: "Z1234567890ABC",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.gamma.example.test",
+            edgeJwtAuthEnabled: false
+          }
+        },
+        "gamma"
+      ),
+    /edgeJwtAuthEnabled may be false only for dev/
   );
 });
 
@@ -118,6 +151,9 @@ test("defines canonical M9 auth OAuth resource action and SSE route contract", (
     "GET /oauth/google/status",
     "DELETE /oauth/google/connection",
     "GET /setup/status",
+    "POST /provider-secrets/session",
+    "GET /provider-secrets/session/{provider}/status",
+    "DELETE /provider-secrets/session/{provider}",
     "GET /providers",
     "GET /resources",
     "POST /resource-sessions",
@@ -199,6 +235,7 @@ test("validates trusted-user runtime config without leaking secret values", () =
     ...validConfig,
     GOOGLE_OAUTH_CLIENT_SECRET_REF: "super-secret-value",
     API_BASE_URL: "http://localhost:8080",
+    GOOGLE_OAUTH_CALLBACK_URL: "https://api.example.test/auth/google/callback",
     ALLOWED_ORIGINS: "https://example.test,http://bad.example.test",
     SSE_HEARTBEAT_SECONDS: "soon",
     TRUSTED_USER_MODE: "false"
@@ -207,6 +244,7 @@ test("validates trusted-user runtime config without leaking secret values", () =
   assert.equal(invalid.valid, false);
   assert.equal(invalid.setupStatus, "blocked");
   assert.ok(invalid.safeMessages.some((message) => message.includes("API_BASE_URL must use https")));
+  assert.ok(invalid.safeMessages.some((message) => message.includes("GOOGLE_OAUTH_CALLBACK_URL must use /oauth/google/callback")));
   assert.ok(invalid.safeMessages.some((message) => message.includes("ALLOWED_ORIGINS origin http://bad.example.test must use https")));
   assert.ok(invalid.safeMessages.some((message) => message.includes("TRUSTED_USER_MODE must be true")));
   assert.ok(invalid.safeMessages.some((message) => message.includes("SSE_HEARTBEAT_SECONDS must be a positive integer")));

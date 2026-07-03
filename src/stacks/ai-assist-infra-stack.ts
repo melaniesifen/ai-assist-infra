@@ -31,6 +31,8 @@ const DEFAULT_SSE_HEARTBEAT_SECONDS = 25;
 const DEFAULT_SSE_REPLAY_WINDOW_SECONDS = 300;
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../../..");
 const PYTHON_SERVICE_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/python-service");
+const SERVICE_CONTAINER_CPU_ARCHITECTURE = ecs.CpuArchitecture.ARM64;
+const SERVICE_CONTAINER_IMAGE_PLATFORM = ecrAssets.Platform.LINUX_ARM64;
 
 export interface AiAssistInfraStackProps extends cdk.StackProps {
   readonly environmentName?: string;
@@ -152,16 +154,18 @@ export class AiAssistInfraStack extends cdk.Stack {
       protocolType: "HTTP",
       description: "Trusted-user HTTP command routes wired to service runtimes for AI Assist."
     });
-    const authorizer = new apigatewayv2.CfnAuthorizer(this, "ProductSessionJwtAuthorizer", {
-      apiId: api.ref,
-      authorizerType: "JWT",
-      identitySource: ["$request.header.Authorization"],
-      name: buildTargetResourceName(deploymentTarget, "product-session-authorizer"),
-      jwtConfiguration: {
-        issuer: deploymentConfig.productAuthIssuer,
-        audience: [deploymentConfig.productAuthAudience]
-      }
-    });
+    const authorizer = deploymentConfig.edgeJwtAuthEnabled
+      ? new apigatewayv2.CfnAuthorizer(this, "ProductSessionJwtAuthorizer", {
+          apiId: api.ref,
+          authorizerType: "JWT",
+          identitySource: ["$request.header.Authorization"],
+          name: buildTargetResourceName(deploymentTarget, "product-session-authorizer"),
+          jwtConfiguration: {
+            issuer: deploymentConfig.productAuthIssuer,
+            audience: [deploymentConfig.productAuthAudience]
+          }
+        })
+      : null;
     const accessLogGroup = new logs.LogGroup(this, "HttpApiAccessLogGroup", {
       logGroupName: `/aws/apigateway/${buildTargetResourceName(deploymentTarget, "http-api-access")}`,
       retention: retentionDays(deploymentTarget.logRetentionDays),
@@ -169,38 +173,6 @@ export class AiAssistInfraStack extends cdk.Stack {
     });
 
     const defaultLimits = buildDefaultRouteRateLimits();
-    new apigatewayv2.CfnStage(this, "HttpApiDefaultStage", {
-      apiId: api.ref,
-      stageName: "$default",
-      autoDeploy: true,
-      defaultRouteSettings: {
-        throttlingBurstLimit: Math.max(...Object.values(defaultLimits).map((limit) => limit.burst)),
-        throttlingRateLimit: Math.max(...Object.values(defaultLimits).map((limit) => limit.requestsPerMinute)) / 60
-      },
-      accessLogSettings: {
-        destinationArn: accessLogGroup.logGroupArn,
-        format: JSON.stringify({
-          requestId: "$context.requestId",
-          routeKey: "$context.routeKey",
-          status: "$context.status",
-          responseLatency: "$context.responseLatency",
-          integrationStatus: "$context.integrationStatus",
-          errorMessage: "$context.error.message"
-        })
-      },
-      routeSettings: Object.fromEntries(
-        Object.entries(defaultLimits)
-          .filter(([routeKey]) => SERVICE_ROUTES.some((route) => route.routeKey === routeKey && route.edgeSurface === "api-gateway"))
-          .map(([routeKey, limit]) => [
-          routeKey,
-          {
-            ThrottlingBurstLimit: limit.burst,
-            ThrottlingRateLimit: limit.requestsPerMinute / 60
-          }
-        ])
-      )
-    });
-
     const placeholderFunction = this.createHealthPlaceholderFunction(deploymentTarget);
     const placeholderIntegration = new apigatewayv2.CfnIntegration(this, "RoutePlaceholderIntegration", {
       apiId: api.ref,
@@ -218,6 +190,7 @@ export class AiAssistInfraStack extends cdk.Stack {
       })
     });
 
+    const routeResources: apigatewayv2.CfnRoute[] = [];
     for (const route of SERVICE_ROUTES.filter((candidate) => candidate.edgeSurface === "api-gateway")) {
       const targetIntegration = route.intentionallyPlaceholder
         ? placeholderIntegration
@@ -225,17 +198,43 @@ export class AiAssistInfraStack extends cdk.Stack {
       const routeResource = new apigatewayv2.CfnRoute(this, routeConstructId(route.routeKey), {
         apiId: api.ref,
         routeKey: route.routeKey,
-        authorizationType: route.requiresAuthentication ? "JWT" : "NONE",
-        authorizerId: route.requiresAuthentication ? authorizer.ref : undefined,
+        authorizationType: route.requiresAuthentication && authorizer ? "JWT" : "NONE",
+        authorizerId: route.requiresAuthentication && authorizer ? authorizer.ref : undefined,
         target: `integrations/${targetIntegration.ref}`
       });
       routeResource.cfnOptions.metadata = {
         owningService: route.service,
         rateLimitTier: route.rateLimitTier,
         requiresAuthentication: route.requiresAuthentication,
+        edgeJwtAuthEnabled: deploymentConfig.edgeJwtAuthEnabled,
         integration: route.intentionallyPlaceholder ? "health-placeholder" : "service-runtime",
         edgeSurface: route.edgeSurface
       };
+      routeResources.push(routeResource);
+    }
+
+    const defaultStage = new apigatewayv2.CfnStage(this, "HttpApiDefaultStage", {
+      apiId: api.ref,
+      stageName: "$default",
+      autoDeploy: true,
+      defaultRouteSettings: {
+        throttlingBurstLimit: Math.max(...Object.values(defaultLimits).map((limit) => limit.burst)),
+        throttlingRateLimit: Math.max(...Object.values(defaultLimits).map((limit) => limit.requestsPerMinute)) / 60
+      },
+      accessLogSettings: {
+        destinationArn: accessLogGroup.logGroupArn,
+        format: JSON.stringify({
+          requestId: "$context.requestId",
+          routeKey: "$context.routeKey",
+          status: "$context.status",
+          responseLatency: "$context.responseLatency",
+          integrationStatus: "$context.integrationStatus",
+          errorMessage: "$context.error.message"
+        })
+      }
+    });
+    for (const routeResource of routeResources) {
+      defaultStage.addDependency(routeResource);
     }
 
     return api;
@@ -355,7 +354,11 @@ exports.handler = async (event) => {
       family: buildTargetResourceName(deploymentTarget, `${service}-task`),
       cpu: 256,
       memoryLimitMiB: 512,
-      taskRole
+      taskRole,
+      runtimePlatform: {
+        cpuArchitecture: SERVICE_CONTAINER_CPU_ARCHITECTURE,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX
+      }
     });
     const logGroup = new logs.LogGroup(this, `${serviceId}LogGroup`, {
       logGroupName: `/aws/ecs/${buildTargetResourceName(deploymentTarget, service)}`,
@@ -453,7 +456,11 @@ exports.handler = async (event) => {
       family: buildTargetResourceName(deploymentTarget, `${service}-sse-task`),
       cpu: 256,
       memoryLimitMiB: 512,
-      taskRole
+      taskRole,
+      runtimePlatform: {
+        cpuArchitecture: SERVICE_CONTAINER_CPU_ARCHITECTURE,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX
+      }
     });
     const logGroup = new logs.LogGroup(this, `${serviceId}LogGroup`, {
       logGroupName: `/aws/ecs/${buildTargetResourceName(deploymentTarget, `${service}-sse`)}`,
@@ -555,7 +562,8 @@ exports.handler = async (event) => {
         },
         buildContexts: {
           service: path.join(WORKSPACE_ROOT, asset.sourceDirectory)
-        }
+        },
+        platform: SERVICE_CONTAINER_IMAGE_PLATFORM
       })
     );
   }

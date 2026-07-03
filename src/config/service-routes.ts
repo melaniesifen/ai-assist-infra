@@ -35,9 +35,17 @@ export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
     requiresAuthentication: false,
     intentionallyPlaceholder: true
   }),
+  route("POST", "/auth/login", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW, {
+    requiresAuthentication: false
+  }),
+  route("POST", "/auth/logout", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("GET", "/auth/session", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
-  route("GET", "/auth/google/start", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
-  route("GET", "/auth/google/callback", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
+  route("POST", "/oauth/google/start", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW),
+  route("GET", "/oauth/google/callback", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.PUBLIC_LOW, {
+    requiresAuthentication: false
+  }),
+  route("GET", "/oauth/google/status", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
+  route("DELETE", "/oauth/google/connection", SERVICES.AUTH, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("GET", "/setup/status", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("POST", "/provider-secrets/session", SERVICES.SECRETS, ROUTE_RATE_LIMIT_TIERS.EXPENSIVE),
   route("GET", "/provider-secrets/session/{provider}/status", SERVICES.SECRETS, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
@@ -47,7 +55,7 @@ export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
   route("POST", "/resource-sessions", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("GET", "/resource-sessions/{sessionId}", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("POST", "/resource-sessions/{sessionId}/commands", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.EXPENSIVE),
-  route("GET", "/resource-sessions/{sessionId}/events", SERVICES.SESSION_EVENTS, ROUTE_RATE_LIMIT_TIERS.STREAM, {
+  route("GET", "/sessions/{sessionId}/events", SERVICES.SESSION_EVENTS, ROUTE_RATE_LIMIT_TIERS.STREAM, {
     edgeSurface: "public-alb"
   }),
   route("GET", "/context-modes", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),

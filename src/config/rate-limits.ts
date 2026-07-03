@@ -15,13 +15,20 @@ export const DEFAULT_RATE_LIMIT_TIERS: Readonly<Record<RouteRateLimitTier, RateL
 });
 
 const REQUIRED_RATE_LIMIT_PATHS = Object.freeze([
-  "/auth/google/start",
-  "/auth/google/callback",
+  "/auth/login",
+  "/auth/logout",
+  "/auth/session",
+  "/oauth/google/start",
+  "/oauth/google/callback",
+  "/oauth/google/status",
+  "/oauth/google/connection",
   "/setup/status",
   "/provider-secrets/session",
+  "/resources",
+  "/resource-sessions",
   "/resource-sessions/{sessionId}/commands",
   "/resource-sessions/{sessionId}/context-preview",
-  "/resource-sessions/{sessionId}/events",
+  "/sessions/{sessionId}/events",
   "/resource-sessions/{sessionId}/actions",
   "/resource-sessions/{sessionId}/apply-action"
 ]);

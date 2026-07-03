@@ -8,6 +8,7 @@ export interface TargetDeploymentConfig {
   readonly sseDomainName: string;
   readonly productAuthIssuer: string;
   readonly productAuthAudience: string;
+  readonly edgeJwtAuthEnabled: boolean;
 }
 
 export type DeploymentConfigByTarget = Partial<Record<EnvironmentName, TargetDeploymentConfig>>;
@@ -30,8 +31,9 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const hostedZoneId = requireString(value.hostedZoneId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneId`);
   const hostedZoneName = normalizeDomainName(requireString(value.hostedZoneName, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneName`));
   const sseDomainName = normalizeDomainName(requireString(value.sseDomainName, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.sseDomainName`));
-  const productAuthIssuer = requireString(value.productAuthIssuer, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthIssuer`);
-  const productAuthAudience = requireString(value.productAuthAudience, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthAudience`);
+  const edgeJwtAuthEnabled = value.edgeJwtAuthEnabled !== undefined ? requireBoolean(value.edgeJwtAuthEnabled, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled`) : true;
+  const productAuthIssuer = edgeJwtAuthEnabled ? requireString(value.productAuthIssuer, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthIssuer`) : optionalString(value.productAuthIssuer);
+  const productAuthAudience = edgeJwtAuthEnabled ? requireString(value.productAuthAudience, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthAudience`) : optionalString(value.productAuthAudience);
 
   if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneId must be a Route 53 hosted zone id`);
@@ -42,13 +44,18 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   if (!isValidDnsName(sseDomainName) || !isSubdomainOf(sseDomainName, hostedZoneName)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.sseDomainName must be a subdomain of hostedZoneName`);
   }
-  try {
-    const issuer = new URL(productAuthIssuer);
-    if (issuer.protocol !== "https:") {
-      throw new Error("issuer must use https");
+  if (!edgeJwtAuthEnabled && environmentName !== "dev") {
+    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled may be false only for dev`);
+  }
+  if (edgeJwtAuthEnabled) {
+    try {
+      const issuer = new URL(productAuthIssuer);
+      if (issuer.protocol !== "https:") {
+        throw new Error("issuer must use https");
+      }
+    } catch {
+      throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthIssuer must be an https URL`);
     }
-  } catch {
-    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthIssuer must be an https URL`);
   }
 
   return {
@@ -56,7 +63,8 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
     hostedZoneName,
     sseDomainName,
     productAuthIssuer,
-    productAuthAudience
+    productAuthAudience,
+    edgeJwtAuthEnabled
   };
 }
 
@@ -76,6 +84,17 @@ function requireString(value: unknown, fieldName: string): string {
     throw new Error(`${fieldName} is required`);
   }
   return value.trim();
+}
+
+function optionalString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function requireBoolean(value: unknown, fieldName: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
 }
 
 function normalizeDomainName(value: string): string {
