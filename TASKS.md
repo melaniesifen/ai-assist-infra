@@ -54,9 +54,15 @@ Relevant LLDs:
 - [x] Add integration tests or assertions for HTTP/SSE route auth, DynamoDB TTL tables, KMS grants, service IAM boundaries, and rate-limit configuration. Current M9-T2 state: assertion tests cover API Gateway JWT route auth, VPC link service integrations, public ALB SSE hosting, DynamoDB TTL tables, one shared KMS app key, ECS task roles, IAM/KMS/DynamoDB grants, rate limits, logs, alarms, and stage-safe names.
 - [x] Define deployment pipeline tasks for synth/diff, environment parameter validation, least-privilege policy checks, migrations, smoke tests, and rollback notes.
 - [x] Add failure-mode validation for KMS denial, DynamoDB throttling, SSE route failure, rate-limit misconfiguration, TTL expiry behavior, and alarm/runbook coverage.
+- [x] Add repeatable CDK Docker image assets for Python service runtimes so deploys no longer require manually supplied service image URI parameters.
+- [x] Add gamma as a first-class deployment target with stage-safe names between dev and prod.
+- [x] Add container deployment guardrails for non-`latest` base image selection, CDK asset image publication, and Fargate `LATEST` platform version.
+- [x] Move SSE domain, hosted zone, product auth issuer, and product auth audience from CloudFormation parameters to ignored local CDK context so standard deploys do not require manual parameters.
+- [x] Let CDK create public SSE ACM certificates, DNS validation, and Route 53 alias records from the configured hosted zone for repeatable dev/gamma/prod deploys.
 
 ## Future Production Tasks
 
 - [ ] Add app-level tenant/user rate-limit counters before public or broader tenant access.
 - [ ] Add multi-environment promotion pipeline after MVP stack shape is stable.
 - [ ] Add cost, quota, and budget alarms once provider usage metrics are wired.
+- [ ] Replace deployable health-only service containers with production HTTP adapters for each trusted-user MVP route before claiming real end-to-end smoke coverage.

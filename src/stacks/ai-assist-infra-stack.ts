@@ -1,15 +1,22 @@
 import * as cdk from "aws-cdk-lib";
 import * as apigatewayv2 from "aws-cdk-lib/aws-apigatewayv2";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecrAssets from "aws-cdk-lib/aws-ecr-assets";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as route53 from "aws-cdk-lib/aws-route53";
+import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
 import { Construct } from "constructs";
+import * as path from "node:path";
+import { PYTHON_SERVICE_BASE_IMAGE, getPythonServiceContainerAsset } from "../config/container-assets";
+import { DEPLOYMENT_CONFIG_CONTEXT_KEY, TargetDeploymentConfig, parseDeploymentConfigContext } from "../config/deployment-config";
 import { DynamoDbTableSpec, listDynamoDbTableSpecs } from "../config/dynamodb-tables";
 import { DeploymentTarget, ENVIRONMENTS, buildTargetResourceName, isProductionEnvironment, normalizeEnvironmentName } from "../config/environments";
 import { DYNAMODB_ACCESS_LEVELS, IAM_BOUNDARY_MATRIX, KMS_ACCESS_LEVELS } from "../config/iam-boundaries";
@@ -22,10 +29,13 @@ const SERVICE_CONTAINER_PORT = 8080;
 const SSE_IDLE_TIMEOUT_SECONDS = 900;
 const DEFAULT_SSE_HEARTBEAT_SECONDS = 25;
 const DEFAULT_SSE_REPLAY_WINDOW_SECONDS = 300;
+const WORKSPACE_ROOT = path.resolve(__dirname, "../../../..");
+const PYTHON_SERVICE_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/python-service");
 
 export interface AiAssistInfraStackProps extends cdk.StackProps {
   readonly environmentName?: string;
   readonly deploymentTarget?: DeploymentTarget;
+  readonly deploymentConfig?: TargetDeploymentConfig;
 }
 
 interface ServiceRuntimeInfrastructure {
@@ -50,12 +60,13 @@ export class AiAssistInfraStack extends cdk.Stack {
       removalProtection: isProductionEnvironment(props.environmentName ?? ENVIRONMENTS.DEV),
       logRetentionDays: isProductionEnvironment(props.environmentName ?? ENVIRONMENTS.DEV) ? 365 : 30
     };
+    const deploymentConfig = props.deploymentConfig ?? parseDeploymentConfigContext(this.node.tryGetContext(DEPLOYMENT_CONFIG_CONTEXT_KEY), deploymentTarget.environmentName);
     const environmentName = normalizeEnvironmentName(deploymentTarget.environmentName);
     const keys = this.createKmsKeys(deploymentTarget);
     const tables = this.createDynamoDbTables(deploymentTarget, keys);
     const serviceRoles = this.createServiceRoles(tables, keys);
-    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, serviceRoles);
-    const api = this.createHttpRouteInventory(deploymentTarget, runtime);
+    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, serviceRoles, deploymentConfig);
+    const api = this.createHttpRouteInventory(deploymentTarget, runtime, deploymentConfig);
     this.createOperationalAlarms(deploymentTarget);
 
     cdk.Tags.of(this).add("ai-assist:environment", environmentName);
@@ -72,7 +83,7 @@ export class AiAssistInfraStack extends cdk.Stack {
       value: environmentName
     });
     new cdk.CfnOutput(this, "SseBaseUrl", {
-      value: `https://${runtime.publicSseLoadBalancer.loadBalancerDnsName}`
+      value: `https://${deploymentConfig.sseDomainName}`
     });
   }
 
@@ -135,19 +146,11 @@ export class AiAssistInfraStack extends cdk.Stack {
     return tables;
   }
 
-  private createHttpRouteInventory(deploymentTarget: DeploymentTarget, runtime: ServiceRuntimeInfrastructure): apigatewayv2.CfnApi {
+  private createHttpRouteInventory(deploymentTarget: DeploymentTarget, runtime: ServiceRuntimeInfrastructure, deploymentConfig: TargetDeploymentConfig): apigatewayv2.CfnApi {
     const api = new apigatewayv2.CfnApi(this, "HttpApi", {
       name: buildTargetResourceName(deploymentTarget, "http-api"),
       protocolType: "HTTP",
       description: "Trusted-user HTTP command routes wired to service runtimes for AI Assist."
-    });
-    const authIssuer = new cdk.CfnParameter(this, "ProductAuthIssuer", {
-      type: "String",
-      description: "Product auth token issuer for HTTP API JWT authorization."
-    });
-    const authAudience = new cdk.CfnParameter(this, "ProductAuthAudience", {
-      type: "String",
-      description: "Product auth token audience for HTTP API JWT authorization."
     });
     const authorizer = new apigatewayv2.CfnAuthorizer(this, "ProductSessionJwtAuthorizer", {
       apiId: api.ref,
@@ -155,8 +158,8 @@ export class AiAssistInfraStack extends cdk.Stack {
       identitySource: ["$request.header.Authorization"],
       name: buildTargetResourceName(deploymentTarget, "product-session-authorizer"),
       jwtConfiguration: {
-        issuer: authIssuer.valueAsString,
-        audience: [authAudience.valueAsString]
+        issuer: deploymentConfig.productAuthIssuer,
+        audience: [deploymentConfig.productAuthAudience]
       }
     });
     const accessLogGroup = new logs.LogGroup(this, "HttpApiAccessLogGroup", {
@@ -293,7 +296,8 @@ exports.handler = async (event) => {
     deploymentTarget: DeploymentTarget,
     tables: Record<string, dynamodb.Table>,
     keys: Record<KmsPurpose, kms.Key>,
-    serviceRoles: Record<string, iam.Role>
+    serviceRoles: Record<string, iam.Role>,
+    deploymentConfig: TargetDeploymentConfig
   ): ServiceRuntimeInfrastructure {
     const vpc = new ec2.Vpc(this, "ServiceVpc", {
       vpcName: buildTargetResourceName(deploymentTarget, "service-vpc"),
@@ -328,7 +332,7 @@ exports.handler = async (event) => {
       serviceListeners[service] = runtime.listener;
     }
 
-    const publicSseLoadBalancer = this.createPublicSseLoadBalancer(deploymentTarget, vpc, cluster, serviceRoles[SERVICES.SESSION_EVENTS], sharedEnvironment);
+    const publicSseLoadBalancer = this.createPublicSseLoadBalancer(deploymentTarget, vpc, cluster, serviceRoles[SERVICES.SESSION_EVENTS], sharedEnvironment, deploymentConfig);
 
     return {
       vpcLink,
@@ -347,10 +351,6 @@ exports.handler = async (event) => {
     vpcLinkSecurityGroup: ec2.SecurityGroup
   ): { readonly service: ecs.FargateService; readonly listener: elbv2.ApplicationListener } {
     const serviceId = toPascalCase(service);
-    const imageUri = new cdk.CfnParameter(this, `${serviceId}ImageUri`, {
-      type: "String",
-      description: `Container image URI for ${service}.`
-    });
     const taskDefinition = new ecs.FargateTaskDefinition(this, `${serviceId}TaskDefinition`, {
       family: buildTargetResourceName(deploymentTarget, `${service}-task`),
       cpu: 256,
@@ -363,7 +363,7 @@ exports.handler = async (event) => {
       removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
     });
     const container = taskDefinition.addContainer(`${serviceId}Container`, {
-      image: ecs.ContainerImage.fromRegistry(imageUri.valueAsString),
+      image: this.createPythonServiceContainerImage(service, serviceId),
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: service,
         logGroup
@@ -403,6 +403,7 @@ exports.handler = async (event) => {
       cluster,
       taskDefinition,
       desiredCount: 1,
+      platformVersion: ecs.FargatePlatformVersion.LATEST,
       circuitBreaker: {
         rollback: true
       },
@@ -443,14 +444,11 @@ exports.handler = async (event) => {
     vpc: ec2.Vpc,
     cluster: ecs.Cluster,
     taskRole: iam.Role,
-    sharedEnvironment: Record<string, string>
+    sharedEnvironment: Record<string, string>,
+    deploymentConfig: TargetDeploymentConfig
   ): elbv2.ApplicationLoadBalancer {
     const service = SERVICES.SESSION_EVENTS;
     const serviceId = "SessionEventsSse";
-    const imageUri = new cdk.CfnParameter(this, `${serviceId}ImageUri`, {
-      type: "String",
-      description: "Container image URI for the public SSE session-events runtime."
-    });
     const taskDefinition = new ecs.FargateTaskDefinition(this, `${serviceId}TaskDefinition`, {
       family: buildTargetResourceName(deploymentTarget, `${service}-sse-task`),
       cpu: 256,
@@ -463,7 +461,7 @@ exports.handler = async (event) => {
       removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
     });
     const container = taskDefinition.addContainer(`${serviceId}Container`, {
-      image: ecs.ContainerImage.fromRegistry(imageUri.valueAsString),
+      image: this.createPythonServiceContainerImage(service, serviceId),
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: `${service}-sse`,
         logGroup
@@ -496,6 +494,7 @@ exports.handler = async (event) => {
       cluster,
       taskDefinition,
       desiredCount: 1,
+      platformVersion: ecs.FargatePlatformVersion.LATEST,
       circuitBreaker: {
         rollback: true
       },
@@ -506,10 +505,6 @@ exports.handler = async (event) => {
         subnetType: ec2.SubnetType.PUBLIC
       }
     });
-    const certificateArn = new cdk.CfnParameter(this, "SseCertificateArn", {
-      type: "String",
-      description: "ACM certificate ARN for the public SSE HTTPS listener."
-    });
     const loadBalancer = new elbv2.ApplicationLoadBalancer(this, `${serviceId}LoadBalancer`, {
       loadBalancerName: loadBalancerName(deploymentTarget, "session-events", "sse"),
       vpc,
@@ -517,10 +512,18 @@ exports.handler = async (event) => {
       securityGroup: loadBalancerSecurityGroup,
       idleTimeout: cdk.Duration.seconds(SSE_IDLE_TIMEOUT_SECONDS)
     });
+    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, "PublicHostedZone", {
+      hostedZoneId: deploymentConfig.hostedZoneId,
+      zoneName: deploymentConfig.hostedZoneName
+    });
+    const certificate = new acm.Certificate(this, `${serviceId}Certificate`, {
+      domainName: deploymentConfig.sseDomainName,
+      validation: acm.CertificateValidation.fromDns(hostedZone)
+    });
     const listener = loadBalancer.addListener(`${serviceId}HttpsListener`, {
       port: 443,
       protocol: elbv2.ApplicationProtocol.HTTPS,
-      certificates: [elbv2.ListenerCertificate.fromArn(certificateArn.valueAsString)]
+      certificates: [elbv2.ListenerCertificate.fromCertificateManager(certificate)]
     });
     listener.addTargets(`${serviceId}Targets`, {
       port: SERVICE_CONTAINER_PORT,
@@ -533,7 +536,28 @@ exports.handler = async (event) => {
       },
       deregistrationDelay: cdk.Duration.seconds(30)
     });
+    new route53.ARecord(this, `${serviceId}DnsRecord`, {
+      zone: hostedZone,
+      recordName: deploymentConfig.sseDomainName,
+      target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(loadBalancer))
+    });
     return loadBalancer;
+  }
+
+  private createPythonServiceContainerImage(service: ServiceName, constructId: string): ecs.ContainerImage {
+    const asset = getPythonServiceContainerAsset(service);
+    return ecs.ContainerImage.fromDockerImageAsset(
+      new ecrAssets.DockerImageAsset(this, `${constructId}ImageAsset`, {
+        directory: PYTHON_SERVICE_DOCKER_CONTEXT,
+        buildArgs: {
+          PYTHON_BASE_IMAGE: PYTHON_SERVICE_BASE_IMAGE,
+          PYTHON_PACKAGE: asset.pythonPackage
+        },
+        buildContexts: {
+          service: path.join(WORKSPACE_ROOT, asset.sourceDirectory)
+        }
+      })
+    );
   }
 
   private buildSharedServiceEnvironment(

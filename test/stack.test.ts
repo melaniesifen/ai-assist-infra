@@ -9,10 +9,19 @@ import { OPERATIONAL_ALARMS } from "../src/config/operational-guardrails";
 import { SERVICE_ROUTES } from "../src/config/service-routes";
 import { AiAssistInfraStack } from "../src/stacks/ai-assist-infra-stack";
 
+const TEST_DEPLOYMENT_CONFIG = {
+  hostedZoneId: "Z1234567890ABC",
+  hostedZoneName: "example.test",
+  sseDomainName: "sse.dev.example.test",
+  productAuthIssuer: "https://auth.test.example/",
+  productAuthAudience: "ai-assist-test"
+};
+
 function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): Template {
   const app = new cdk.App();
   const stack = new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
+    deploymentConfig: TEST_DEPLOYMENT_CONFIG,
     stackName: target.stackName,
     env: {
       account: "111111111111",
@@ -26,6 +35,7 @@ function synthStack(target: DeploymentTarget): cdk.Stack {
   const app = new cdk.App();
   return new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
+    deploymentConfig: TEST_DEPLOYMENT_CONFIG,
     stackName: target.stackName,
     env: {
       account: "111111111111",
@@ -34,18 +44,27 @@ function synthStack(target: DeploymentTarget): cdk.Stack {
   });
 }
 
-test("synthesizes distinct dev and prod deployment targets", () => {
-  const [devTarget, prodTarget] = listDeploymentTargets();
+test("synthesizes distinct dev gamma and prod deployment targets", () => {
+  const [devTarget, gammaTarget, prodTarget] = listDeploymentTargets();
   const devTemplate = synthTemplate(devTarget);
+  const gammaTemplate = synthTemplate(gammaTarget);
   const prodTemplate = synthTemplate(prodTarget);
 
   assert.equal(synthStack(devTarget).stackName, "AiAssistDevInfraStack");
+  assert.equal(synthStack(gammaTarget).stackName, "AiAssistGammaInfraStack");
   assert.equal(synthStack(prodTarget).stackName, "AiAssistProdInfraStack");
   devTemplate.hasResourceProperties("AWS::ApiGatewayV2::Api", {
     Name: "ai-assist-dev-us-west-2-http-api"
   });
+  gammaTemplate.hasResourceProperties("AWS::ApiGatewayV2::Api", {
+    Name: "ai-assist-gamma-us-west-2-http-api"
+  });
   prodTemplate.hasResourceProperties("AWS::ApiGatewayV2::Api", {
     Name: "ai-assist-prod-us-west-2-http-api"
+  });
+  gammaTemplate.hasResourceProperties("AWS::DynamoDB::Table", {
+    TableName: "ai-assist-gamma-us-west-2-SessionSecrets",
+    DeletionProtectionEnabled: true
   });
   prodTemplate.hasResourceProperties("AWS::DynamoDB::Table", {
     TableName: "ai-assist-prod-us-west-2-SessionSecrets",
@@ -119,6 +138,29 @@ test("synthesizes the HTTP and SSE route inventory", () => {
     AuthorizationType: "JWT",
     Target: Match.anyValue()
   });
+  template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
+    RouteKey: "GET /oauth/google/callback",
+    AuthorizationType: "NONE",
+    Target: Match.anyValue()
+  });
+  template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
+    RouteKey: "POST /auth/login",
+    AuthorizationType: "NONE",
+    Target: Match.anyValue()
+  });
+  template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
+    RouteKey: "GET /oauth/google/status",
+    AuthorizationType: "JWT",
+    Target: Match.anyValue()
+  });
+  template.hasResourceProperties("AWS::ApiGatewayV2::Authorizer", {
+    AuthorizerType: "JWT",
+    IdentitySource: ["$request.header.Authorization"],
+    JwtConfiguration: {
+      Audience: ["ai-assist-test"],
+      Issuer: "https://auth.test.example/"
+    }
+  });
   template.hasResourceProperties("AWS::ApiGatewayV2::Integration", {
     IntegrationType: "HTTP_PROXY",
     ConnectionType: "VPC_LINK",
@@ -168,12 +210,33 @@ test("synthesizes Fargate service runtimes and public ALB SSE hosting", () => {
       }
     ])
   });
+  template.hasResourceProperties("AWS::CertificateManager::Certificate", {
+    DomainName: "sse.dev.example.test",
+    DomainValidationOptions: Match.arrayWith([
+      Match.objectLike({
+        DomainName: "sse.dev.example.test",
+        HostedZoneId: "Z1234567890ABC"
+      })
+    ]),
+    ValidationMethod: "DNS"
+  });
+  template.hasResourceProperties("AWS::Route53::RecordSet", {
+    Name: "sse.dev.example.test.",
+    Type: "A",
+    HostedZoneId: "Z1234567890ABC"
+  });
   template.hasResourceProperties("AWS::ECS::Service", {
-    ServiceName: "ai-assist-dev-us-west-2-ai-assist-session-events-service-sse"
+    ServiceName: "ai-assist-dev-us-west-2-ai-assist-session-events-service-sse",
+    PlatformVersion: "LATEST"
+  });
+  template.hasResourceProperties("AWS::ECS::Service", {
+    ServiceName: "ai-assist-dev-us-west-2-ai-assist-auth-service",
+    PlatformVersion: "LATEST"
   });
   template.hasResourceProperties("AWS::ECS::TaskDefinition", {
     ContainerDefinitions: Match.arrayWith([
       Match.objectLike({
+        Image: Match.anyValue(),
         Environment: Match.arrayWith([
           {
             Name: "SSE_HEARTBEAT_SECONDS",
@@ -191,6 +254,17 @@ test("synthesizes Fargate service runtimes and public ALB SSE hosting", () => {
     LogGroupName: "/aws/ecs/ai-assist-dev-us-west-2-ai-assist-session-events-service-sse",
     RetentionInDays: 30
   });
+});
+
+test("does not require service image or auth/certificate parameters after switching to assets and local context", () => {
+  const template = synthTemplate().toJSON();
+  const parameterNames = Object.keys((template.Parameters ?? {}) as Record<string, unknown>);
+
+  assert.equal(parameterNames.some((name) => name.endsWith("ImageUri")), false);
+  assert.equal(parameterNames.includes("SseCertificateArn"), false);
+  assert.equal(parameterNames.includes("ProductAuthIssuer"), false);
+  assert.equal(parameterNames.includes("ProductAuthAudience"), false);
+  assert.equal(JSON.stringify(template).includes("sseCertificateArn"), false);
 });
 
 test("synthesizes operational alarms for guarded dependency paths", () => {

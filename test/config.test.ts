@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { PYTHON_SERVICE_BASE_IMAGE, PYTHON_SERVICE_CONTAINER_ASSETS, validateContainerAssetConfig } from "../src/config/container-assets";
+import { DEPLOYMENT_CONFIG_CONTEXT_KEY, parseDeploymentConfigContext } from "../src/config/deployment-config";
 import { getDynamoDbTableSpec, listDynamoDbTableSpecs } from "../src/config/dynamodb-tables";
 import {
   buildEnvironmentResourceName,
@@ -19,7 +21,8 @@ import { SERVICE_ROUTES, SERVICES, findServiceRoute, groupRoutesByService, listS
 test("normalizes supported environment aliases", () => {
   assert.equal(normalizeEnvironmentName("production"), "prod");
   assert.equal(normalizeEnvironmentName(" development "), "dev");
-  assert.equal(normalizeEnvironmentName(" staging "), "stage");
+  assert.equal(normalizeEnvironmentName(" staging "), "gamma");
+  assert.equal(normalizeEnvironmentName(" stage "), "gamma");
   assert.equal(isProductionEnvironment("prod"), true);
   assert.equal(buildEnvironmentResourceName("dev", "http-api"), "ai-assist-dev-http-api");
   assert.throws(() => normalizeEnvironmentName(" "), /environment name is required/);
@@ -27,14 +30,15 @@ test("normalizes supported environment aliases", () => {
   assert.throws(() => buildEnvironmentResourceName("dev", " "), /resource name is required/);
 });
 
-test("defines exactly two initial deployment targets in one account and region", () => {
+test("defines dev gamma and prod deployment targets in one account and region", () => {
   const targets = listDeploymentTargets();
   const result = validateInitialDeploymentTargets(targets);
 
   assert.equal(result.valid, true);
-  assert.deepEqual(targets.map((target) => target.environmentName), ["dev", "prod"]);
+  assert.deepEqual(targets.map((target) => target.environmentName), ["dev", "gamma", "prod"]);
   assert.deepEqual([...new Set(targets.map((target) => target.accountEnvVar))], ["CDK_DEFAULT_ACCOUNT"]);
   assert.deepEqual([...new Set(targets.map((target) => target.region))], ["us-west-2"]);
+  assert.equal(targets.find((target) => target.environmentName === "gamma")?.removalProtection, true);
   assert.equal(targets.find((target) => target.environmentName === "prod")?.removalProtection, true);
   assert.equal(buildTargetResourceName(targets[0], "http-api"), "ai-assist-dev-us-west-2-http-api");
 
@@ -43,14 +47,104 @@ test("defines exactly two initial deployment targets in one account and region",
   assert.ok(invalid.errors.some((error) => error.includes("prod deployment target is required")));
 });
 
-test("includes MVP SSE route under the session events service", () => {
-  const route = findServiceRoute("GET", "/resource-sessions/{sessionId}/events");
+test("defines secure repeatable Python service container asset inputs", () => {
+  const result = validateContainerAssetConfig();
 
+  assert.equal(result.valid, true);
+  assert.equal(PYTHON_SERVICE_CONTAINER_ASSETS.length, Object.values(SERVICES).length);
+  assert.equal(PYTHON_SERVICE_BASE_IMAGE.includes(":latest"), false);
+  assert.ok(PYTHON_SERVICE_CONTAINER_ASSETS.every((asset) => asset.sourceDirectory.startsWith("ai-assist-")));
+  assert.ok(PYTHON_SERVICE_CONTAINER_ASSETS.some((asset) => asset.service === SERVICES.SESSION_EVENTS));
+});
+
+test("parses local deployment config from CDK context without exposing secrets", () => {
+  const config = parseDeploymentConfigContext(
+    {
+      dev: {
+        hostedZoneId: "Z1234567890ABC",
+        hostedZoneName: "example.test",
+        sseDomainName: "sse.dev.example.test",
+        productAuthIssuer: "https://auth.dev.example.test/",
+        productAuthAudience: "ai-assist-dev"
+      }
+    },
+    "dev"
+  );
+
+  assert.equal(config.productAuthAudience, "ai-assist-dev");
+  assert.equal(config.productAuthIssuer, "https://auth.dev.example.test/");
+  assert.throws(() => parseDeploymentConfigContext({}, "dev"), new RegExp(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.dev is required`));
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          dev: {
+            hostedZoneId: "not-a-zone-id",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.dev.example.test",
+            productAuthIssuer: "http://auth.dev.example.test/",
+            productAuthAudience: "ai-assist-dev"
+          }
+        },
+        "dev"
+      ),
+    /hostedZoneId must be a Route 53 hosted zone id/
+  );
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          dev: {
+            hostedZoneId: "Z1234567890ABC",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.other.test",
+            productAuthIssuer: "https://auth.dev.example.test/",
+            productAuthAudience: "ai-assist-dev"
+          }
+        },
+        "dev"
+      ),
+    /sseDomainName must be a subdomain of hostedZoneName/
+  );
+});
+
+test("defines canonical M9 auth OAuth resource action and SSE route contract", () => {
+  const canonicalRoutes = [
+    "POST /auth/login",
+    "POST /auth/logout",
+    "GET /auth/session",
+    "POST /oauth/google/start",
+    "GET /oauth/google/callback",
+    "GET /oauth/google/status",
+    "DELETE /oauth/google/connection",
+    "GET /setup/status",
+    "GET /providers",
+    "GET /resources",
+    "POST /resource-sessions",
+    "GET /resource-sessions/{sessionId}",
+    "POST /resource-sessions/{sessionId}/commands",
+    "GET /sessions/{sessionId}/events",
+    "GET /context-modes",
+    "PUT /resource-sessions/{sessionId}/context-mode",
+    "POST /resource-sessions/{sessionId}/context-preview",
+    "GET /resource-sessions/{sessionId}/actions",
+    "POST /resource-sessions/{sessionId}/actions/{actionId}/approve",
+    "POST /resource-sessions/{sessionId}/actions/{actionId}/reject",
+    "POST /resource-sessions/{sessionId}/apply-action"
+  ];
+  const routeKeys = SERVICE_ROUTES.map((route) => route.routeKey);
+  const route = findServiceRoute("GET", "/sessions/{sessionId}/events");
+
+  assert.deepEqual(routeKeys, ["GET /health", ...canonicalRoutes]);
   assert.equal(route?.service, SERVICES.SESSION_EVENTS);
   assert.equal(route?.rateLimitTier, "STREAM");
   assert.equal(route?.requiresAuthentication, true);
   assert.equal(route?.edgeSurface, "public-alb");
   assert.equal(SERVICE_ROUTES.filter((candidate) => candidate.intentionallyPlaceholder).map((candidate) => candidate.routeKey).join(","), "GET /health");
+  assert.equal(findServiceRoute("GET", "/auth/google/start"), null);
+  assert.equal(findServiceRoute("GET", "/resource-sessions/{sessionId}/events"), null);
+  assert.equal(findServiceRoute("GET", "/oauth/google/callback")?.requiresAuthentication, false);
+  assert.equal(findServiceRoute("POST", "/auth/login")?.requiresAuthentication, false);
 });
 
 test("returns defensive route copies grouped by service", () => {
@@ -92,7 +186,7 @@ test("validates trusted-user runtime config without leaking secret values", () =
   validConfig.WEB_APP_BASE_URL = "https://example.test";
   validConfig.API_BASE_URL = "https://api.example.test";
   validConfig.SSE_BASE_URL = "https://sse.example.test";
-  validConfig.GOOGLE_OAUTH_CALLBACK_URL = "https://api.example.test/auth/google/callback";
+  validConfig.GOOGLE_OAUTH_CALLBACK_URL = "https://api.example.test/oauth/google/callback";
   validConfig.ALLOWED_ORIGINS = "https://example.test";
   validConfig.SESSION_SECRET_TTL_HOURS = "8";
   validConfig.PROPOSED_ACTION_TTL_HOURS = "24";

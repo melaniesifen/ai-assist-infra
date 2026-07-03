@@ -1,0 +1,25 @@
+{
+  "aiAssistDeploymentConfig": {
+    "dev": {
+      "hostedZoneId": "Z1234567890ABC",
+      "hostedZoneName": "example.test",
+      "sseDomainName": "sse.dev.example.test",
+      "productAuthIssuer": "https://auth.dev.example.test/",
+      "productAuthAudience": "ai-assist-dev"
+    },
+    "gamma": {
+      "hostedZoneId": "Z1234567890ABC",
+      "hostedZoneName": "example.test",
+      "sseDomainName": "sse.gamma.example.test",
+      "productAuthIssuer": "https://auth.gamma.example.test/",
+      "productAuthAudience": "ai-assist-gamma"
+    },
+    "prod": {
+      "hostedZoneId": "Z1234567890ABC",
+      "hostedZoneName": "example.test",
+      "sseDomainName": "sse.example.test",
+      "productAuthIssuer": "https://auth.example.test/",
+      "productAuthAudience": "ai-assist-prod"
+    }
+  }
+}

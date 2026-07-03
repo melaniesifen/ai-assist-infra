@@ -10,7 +10,8 @@ DynamoDB, KMS, IAM boundary, and rate-limit contracts.
 ## Current Contents
 
 - `bin/ai-assist-infra.ts`: CDK app entry point.
-- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP route integrations, Fargate service runtimes, public ALB SSE hosting, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
+- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP route integrations, CDK-built Fargate service image assets, public ALB SSE hosting, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
+- `docker/python-service/`: shared Python service image build context. The image compiles the selected service package and serves a metadata-only `/health` endpoint; unimplemented product routes return a safe `501` until each service repo adds production HTTP adapters.
 - `src/config/*.ts`: typed deployment target, runtime config, route, DynamoDB, KMS, rate-limit, IAM boundary, and operational guardrail inventories.
 - `test/*.test.ts`: Node built-in tests plus CDK assertion tests.
 - `cdk.json`, `tsconfig.json`, `package.json`, and `package-lock.json`: repo-local CDK and TypeScript tooling.
@@ -37,16 +38,18 @@ authorization, and secret-free responses.
 
 ## Deployment Targets
 
-The CDK app synthesizes exactly two initial targets from
+The CDK app synthesizes exactly three initial targets from
 `src/config/environments.ts`:
 
 | Target | Region | Account Source | Stack | Default Removal Posture |
 | --- | --- | --- | --- | --- |
 | `dev` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistDevInfraStack` | cleanup-friendly |
+| `gamma` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistGammaInfraStack` | retain/protect |
 | `prod` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistProdInfraStack` | retain/protect |
 
-Add later stages or regions by editing the typed target list, not by copying
-stack code. Deployable resource names include environment and region, for
+`stage` and `staging` are accepted as aliases for `gamma`. Add later stages or
+regions by editing the typed target list, not by copying stack code. Deployable
+resource names include environment and region, for
 example `ai-assist-dev-us-west-2-http-api`, so KMS aliases, DynamoDB table
 names, API names, log groups, IAM role names, outputs, and future global
 resources have stage-safe and region-safe prefixes.
@@ -82,6 +85,82 @@ service-side authZ, SSE event payloads, and action state transitions.
 The public SSE ALB uses HTTPS, a 900 second idle timeout, session-events
 Fargate tasks, service logs, health checks, and generic SSE config:
 `SSE_HEARTBEAT_SECONDS=25` and `SSE_REPLAY_WINDOW_SECONDS=300`.
+
+## Service Image Assets
+
+Service runtime images are CDK Docker image assets, not manually supplied image
+URI parameters. `cdk deploy` builds and publishes the service images through the
+CDK asset pipeline from the workspace source tree using
+`docker/python-service/Dockerfile`.
+
+Current service image inputs are defined in `src/config/container-assets.ts`.
+The shared image uses `python:3.13-slim-bookworm`, never `latest`, compiles the
+service source during image build, runs as UID/GID `65534`, and exposes
+`SERVICE_PORT=8080`.
+
+This removes the old deploy-time parameters:
+
+```text
+AiAssistAuthServiceImageUri
+AiAssistSecretsServiceImageUri
+AiAssistOrchestrationServiceImageUri
+AiAssistSessionEventsServiceImageUri
+AiAssistContextServiceImageUri
+AiAssistGoogleDocsAdapterImageUri
+SessionEventsSseImageUri
+```
+
+Environment identity/config values come from local CDK context, not
+CloudFormation parameters:
+
+```text
+HostedZoneId
+HostedZoneName
+SseDomainName
+ProductAuthIssuer
+ProductAuthAudience
+```
+
+Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
+placeholder values for each target you plan to synthesize or deploy. CDK uses
+the hosted zone values to request an ACM certificate, create DNS validation, and
+create the Route 53 alias record for the public SSE load balancer. These values
+are not service secrets, but they are account/environment-specific and should
+stay out of source control.
+
+Security notes:
+
+- CDK image assets use content-addressed asset tags instead of mutable
+  hand-picked ECR image tags.
+- Fargate services synthesize with platform version `LATEST`.
+- Enable ECR enhanced scanning on the account/region bootstrap repository
+  before deploying trusted-user stacks.
+- Do not deploy from stale local worktrees; rebuild and synth from the current
+  commit.
+
+Example local context shape:
+
+```json
+{
+  "aiAssistDeploymentConfig": {
+    "dev": {
+      "hostedZoneId": "Z1234567890ABC",
+      "hostedZoneName": "example.test",
+      "sseDomainName": "sse.dev.example.test",
+      "productAuthIssuer": "https://auth.dev.example.test/",
+      "productAuthAudience": "ai-assist-dev"
+    }
+  }
+}
+```
+
+After local context is populated, the deploy command does not need service image
+URI, auth, or certificate parameters:
+
+```sh
+npm run build
+npx cdk deploy AiAssistDevInfraStack
+```
 
 ## Local Real-Flow Config
 

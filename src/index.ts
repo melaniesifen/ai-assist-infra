@@ -1,3 +1,5 @@
+export * from "./config/container-assets";
+export * from "./config/deployment-config";
 export * from "./config/dynamodb-tables";
 export * from "./config/environments";
 export * from "./config/iam-boundaries";

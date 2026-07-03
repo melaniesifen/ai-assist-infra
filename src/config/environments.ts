@@ -1,7 +1,7 @@
 export const ENVIRONMENTS = Object.freeze({
   LOCAL: "local",
   DEV: "dev",
-  STAGE: "stage",
+  GAMMA: "gamma",
   PROD: "prod"
 } as const);
 
@@ -11,8 +11,9 @@ const ENVIRONMENT_ALIASES: Readonly<Record<string, EnvironmentName>> = Object.fr
   local: ENVIRONMENTS.LOCAL,
   development: ENVIRONMENTS.DEV,
   dev: ENVIRONMENTS.DEV,
-  staging: ENVIRONMENTS.STAGE,
-  stage: ENVIRONMENTS.STAGE,
+  gamma: ENVIRONMENTS.GAMMA,
+  staging: ENVIRONMENTS.GAMMA,
+  stage: ENVIRONMENTS.GAMMA,
   production: ENVIRONMENTS.PROD,
   prod: ENVIRONMENTS.PROD
 });
@@ -32,6 +33,11 @@ export const INITIAL_DEPLOYMENT_TARGETS: readonly DeploymentTarget[] = Object.fr
     stackName: "AiAssistDevInfraStack",
     removalProtection: false,
     logRetentionDays: 30
+  }),
+  target(ENVIRONMENTS.GAMMA, {
+    stackName: "AiAssistGammaInfraStack",
+    removalProtection: true,
+    logRetentionDays: 90
   }),
   target(ENVIRONMENTS.PROD, {
     stackName: "AiAssistProdInfraStack",
@@ -82,11 +88,11 @@ export function listDeploymentTargets(): DeploymentTarget[] {
 
 export function validateInitialDeploymentTargets(targets: readonly DeploymentTarget[] = INITIAL_DEPLOYMENT_TARGETS): { readonly valid: boolean; readonly errors: string[] } {
   const errors: string[] = [];
-  if (targets.length !== 2) {
-    errors.push("exactly two initial deployment targets are required");
+  if (targets.length !== 3) {
+    errors.push("exactly three initial deployment targets are required");
   }
 
-  const expected = new Set<EnvironmentName>([ENVIRONMENTS.DEV, ENVIRONMENTS.PROD]);
+  const expected = new Set<EnvironmentName>([ENVIRONMENTS.DEV, ENVIRONMENTS.GAMMA, ENVIRONMENTS.PROD]);
   const seenNames = new Set<string>();
   const seenStacks = new Set<string>();
   const seenResourcePrefixes = new Set<string>();
