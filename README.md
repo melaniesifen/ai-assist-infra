@@ -31,7 +31,8 @@ The current CDK app creates:
 - Service IAM roles with table and KMS grants derived from the IAM boundary matrix.
 - Generated Secrets Manager secrets for dogfood product-session HMAC signing,
   Google OAuth state signing, trusted-user bootstrap login, and the Google
-  OAuth client secret reference.
+  OAuth client secret reference, plus platform provider credential references
+  for OpenAI and Anthropic.
 - A shared dogfood runtime task role with the union of current MVP service data-plane grants; per-service IAM roles remain synthesized for ownership boundaries and future runtime split-out.
 - Default API Gateway throttling based on the route rate-limit tiers.
 
@@ -180,6 +181,15 @@ value so the stack can deploy without plaintext credentials; replace that value
 after deploy with the real Google OAuth client secret. Do not place the Google
 client secret value in `cdk.context.json`, `.env`, shell command history, or the
 ECS task definition.
+`GOOGLE_OAUTH_CALLBACK_URL` is derived from the generated HTTP API endpoint as
+`${API_BASE_URL}/oauth/google/callback`.
+`PRODUCT_AUTH_ISSUER` is injected from the target's ignored deployment context
+alongside `PRODUCT_AUTH_AUDIENCE`.
+`PLATFORM_PROVIDER_SECRET_REF_OPENAI` and
+`PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC` are injected as names of CDK-managed
+Secrets Manager placeholder secrets. Replace only the provider secret values you
+plan to use after deploy; the default dogfood provider is
+`PLATFORM_PROVIDER_DEFAULT=openai`.
 `TrustedUserTenantId` is injected as `TRUSTED_USER_TENANT_ID`; it is not a
 secret, but it should be stable for a target so issued sessions and stored
 tenant-scoped records agree on the same tenant identifier.
@@ -303,7 +313,11 @@ credentials. Service task definitions receive resource-derived table names and
 the shared app KMS key reference from the stack.
 For the deployed dogfood runtime, CDK injects
 `GOOGLE_OAUTH_CLIENT_SECRET_REF=ai-assist-<target>-<region>-google-oauth-client-secret`
-and grants the task role permission to read that secret at runtime.
+and grants the task role permission to read that secret at runtime. It also
+injects provider credential refs named
+`ai-assist-<target>-<region>-platform-provider-openai-secret` and
+`ai-assist-<target>-<region>-platform-provider-anthropic-secret`, with runtime
+read access granted to the same task role.
 
 For local development:
 

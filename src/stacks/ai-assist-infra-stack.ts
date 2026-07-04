@@ -48,7 +48,13 @@ interface ServiceRuntimeInfrastructure {
   readonly sharedHttpListener: elbv2.ApplicationListener;
 }
 
-type RuntimeSecretName = "productAuthHmac" | "oauthStateSigning" | "trustedUserBootstrap" | "googleOAuthClientSecret";
+type RuntimeSecretName =
+  | "productAuthHmac"
+  | "oauthStateSigning"
+  | "trustedUserBootstrap"
+  | "googleOAuthClientSecret"
+  | "platformProviderOpenai"
+  | "platformProviderAnthropic";
 
 export class AiAssistInfraStack extends cdk.Stack {
   public readonly tables: Readonly<Record<string, dynamodb.Table>>;
@@ -186,6 +192,24 @@ export class AiAssistInfraStack extends cdk.Stack {
       googleOAuthClientSecret: new secretsmanager.Secret(this, "GoogleOAuthClientSecret", {
         secretName: buildTargetResourceName(deploymentTarget, "google-oauth-client-secret"),
         description: "Google OAuth client secret placeholder for dogfood auth token exchange. Replace the generated value after deploy.",
+        generateSecretString: {
+          passwordLength: 48,
+          excludePunctuation: true
+        },
+        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+      }),
+      platformProviderOpenai: new secretsmanager.Secret(this, "PlatformProviderOpenaiSecret", {
+        secretName: buildTargetResourceName(deploymentTarget, "platform-provider-openai-secret"),
+        description: "OpenAI platform provider credential placeholder for dogfood runtime. Replace the generated value after deploy when OpenAI is enabled.",
+        generateSecretString: {
+          passwordLength: 48,
+          excludePunctuation: true
+        },
+        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+      }),
+      platformProviderAnthropic: new secretsmanager.Secret(this, "PlatformProviderAnthropicSecret", {
+        secretName: buildTargetResourceName(deploymentTarget, "platform-provider-anthropic-secret"),
+        description: "Anthropic platform provider credential placeholder for dogfood runtime. Replace the generated value after deploy when Anthropic is enabled.",
         generateSecretString: {
           passwordLength: 48,
           excludePunctuation: true
@@ -415,6 +439,8 @@ exports.handler = async (event) => {
       environment: {
         ...sharedEnvironment,
         GOOGLE_OAUTH_CLIENT_SECRET_REF: buildTargetResourceName(deploymentTarget, "google-oauth-client-secret"),
+        PLATFORM_PROVIDER_SECRET_REF_OPENAI: buildTargetResourceName(deploymentTarget, "platform-provider-openai-secret"),
+        PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC: buildTargetResourceName(deploymentTarget, "platform-provider-anthropic-secret"),
         SERVICE_NAME: DOGFOOD_RUNTIME_NAME,
         SERVICE_PORT: String(SERVICE_CONTAINER_PORT),
         ROUTE_OWNING_SERVICES: formatRouteOwnershipEnvironment()
@@ -436,6 +462,8 @@ exports.handler = async (event) => {
     secrets.oauthStateSigning.grantRead(taskDefinition.executionRole!);
     secrets.trustedUserBootstrap.grantRead(taskDefinition.executionRole!);
     secrets.googleOAuthClientSecret.grantRead(taskRole);
+    secrets.platformProviderOpenai.grantRead(taskRole);
+    secrets.platformProviderAnthropic.grantRead(taskRole);
     container.addPortMappings({
       containerPort: SERVICE_CONTAINER_PORT
     });
@@ -580,12 +608,15 @@ exports.handler = async (event) => {
       ALLOWED_ORIGINS: deploymentConfig.webAppBaseUrl,
       API_BASE_URL: apiBaseUrl,
       SSE_BASE_URL: `https://${deploymentConfig.sseDomainName}`,
+      GOOGLE_OAUTH_CALLBACK_URL: cdk.Fn.join("", [apiBaseUrl, "/oauth/google/callback"]),
       GOOGLE_OAUTH_CLIENT_ID: deploymentConfig.googleOAuthClientId,
       TRUSTED_USER_MODE: "true",
       TRUSTED_USER_TENANT_ID: deploymentConfig.trustedUserTenantId,
       TRUSTED_USER_USER_ID: deploymentConfig.trustedUserUserId,
       TRUSTED_USER_AUTH_SUBJECT: deploymentConfig.trustedUserAuthSubject,
+      PRODUCT_AUTH_ISSUER: deploymentConfig.productAuthIssuer,
       PRODUCT_AUTH_AUDIENCE: deploymentConfig.productAuthAudience,
+      PLATFORM_PROVIDER_DEFAULT: "openai",
       APP_KMS_KEY_ID: keys[KMS_PURPOSES.OAUTH_TOKENS].keyArn,
       TENANT_TABLE_NAME: tableName("Tenants"),
       OAUTH_TOKEN_TABLE_NAME: tableName("OAuthTokens"),

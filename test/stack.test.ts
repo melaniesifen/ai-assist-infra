@@ -251,7 +251,7 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
   template.resourceCountIs("AWS::ECS::Cluster", 1);
   template.resourceCountIs("AWS::ECS::Service", 1);
   template.resourceCountIs("AWS::ECS::TaskDefinition", 1);
-  template.resourceCountIs("AWS::SecretsManager::Secret", 4);
+  template.resourceCountIs("AWS::SecretsManager::Secret", 6);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::Listener", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::ListenerRule", 1);
@@ -357,6 +357,10 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
             Value: "https://sse.dev.example.test"
           },
           {
+            Name: "GOOGLE_OAUTH_CALLBACK_URL",
+            Value: Match.anyValue()
+          },
+          {
             Name: "GOOGLE_OAUTH_CLIENT_ID",
             Value: "test-google-client-id.apps.googleusercontent.com"
           },
@@ -373,8 +377,16 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
             Value: "trusted-user:test-user"
           },
           {
+            Name: "PRODUCT_AUTH_ISSUER",
+            Value: "https://auth.test.example/"
+          },
+          {
             Name: "PRODUCT_AUTH_AUDIENCE",
             Value: "ai-assist-test"
+          },
+          {
+            Name: "PLATFORM_PROVIDER_DEFAULT",
+            Value: "openai"
           },
           {
             Name: "SSE_HEARTBEAT_SECONDS",
@@ -387,6 +399,14 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
           {
             Name: "GOOGLE_OAUTH_CLIENT_SECRET_REF",
             Value: "ai-assist-dev-us-west-2-google-oauth-client-secret"
+          },
+          {
+            Name: "PLATFORM_PROVIDER_SECRET_REF_OPENAI",
+            Value: "ai-assist-dev-us-west-2-platform-provider-openai-secret"
+          },
+          {
+            Name: "PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC",
+            Value: "ai-assist-dev-us-west-2-platform-provider-anthropic-secret"
           },
           {
             Name: "SERVICE_NAME",
@@ -434,6 +454,20 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
   });
   template.hasResourceProperties("AWS::SecretsManager::Secret", {
     Name: "ai-assist-dev-us-west-2-google-oauth-client-secret",
+    GenerateSecretString: {
+      PasswordLength: 48,
+      ExcludePunctuation: true
+    }
+  });
+  template.hasResourceProperties("AWS::SecretsManager::Secret", {
+    Name: "ai-assist-dev-us-west-2-platform-provider-openai-secret",
+    GenerateSecretString: {
+      PasswordLength: 48,
+      ExcludePunctuation: true
+    }
+  });
+  template.hasResourceProperties("AWS::SecretsManager::Secret", {
+    Name: "ai-assist-dev-us-west-2-platform-provider-anthropic-secret",
     GenerateSecretString: {
       PasswordLength: 48,
       ExcludePunctuation: true
@@ -525,6 +559,8 @@ test("synthesizes service roles and scoped IAM policy statements", () => {
   assert.ok(JSON.stringify(authPolicy).includes("kms:Encrypt"));
   assert.ok(JSON.stringify(policies).includes("secretsmanager:GetSecretValue"));
   assert.ok(JSON.stringify(policies).includes("GoogleOAuthClientSecret"));
+  assert.ok(JSON.stringify(policies).includes("PlatformProviderOpenaiSecret"));
+  assert.ok(JSON.stringify(policies).includes("PlatformProviderAnthropicSecret"));
   assert.equal(JSON.stringify(googleDocsPolicy).includes("dynamodb:PutItem"), false);
   assert.equal(JSON.stringify(googleDocsPolicy).includes("dynamodb:UpdateItem"), false);
   assert.equal(JSON.stringify(googleDocsPolicy).includes("dynamodb:DeleteItem"), false);
