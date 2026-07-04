@@ -48,7 +48,7 @@ interface ServiceRuntimeInfrastructure {
   readonly sharedHttpListener: elbv2.ApplicationListener;
 }
 
-type RuntimeSecretName = "productAuthHmac" | "oauthStateSigning" | "trustedUserBootstrap";
+type RuntimeSecretName = "productAuthHmac" | "oauthStateSigning" | "trustedUserBootstrap" | "googleOAuthClientSecret";
 
 export class AiAssistInfraStack extends cdk.Stack {
   public readonly tables: Readonly<Record<string, dynamodb.Table>>;
@@ -177,6 +177,15 @@ export class AiAssistInfraStack extends cdk.Stack {
       trustedUserBootstrap: new secretsmanager.Secret(this, "TrustedUserBootstrapSecret", {
         secretName: buildTargetResourceName(deploymentTarget, "trusted-user-bootstrap-secret"),
         description: "Generated bootstrap login secret for trusted-user dogfood auth.",
+        generateSecretString: {
+          passwordLength: 48,
+          excludePunctuation: true
+        },
+        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+      }),
+      googleOAuthClientSecret: new secretsmanager.Secret(this, "GoogleOAuthClientSecret", {
+        secretName: buildTargetResourceName(deploymentTarget, "google-oauth-client-secret"),
+        description: "Google OAuth client secret placeholder for dogfood auth token exchange. Replace the generated value after deploy.",
         generateSecretString: {
           passwordLength: 48,
           excludePunctuation: true
@@ -405,6 +414,7 @@ exports.handler = async (event) => {
       }),
       environment: {
         ...sharedEnvironment,
+        GOOGLE_OAUTH_CLIENT_SECRET_REF: buildTargetResourceName(deploymentTarget, "google-oauth-client-secret"),
         SERVICE_NAME: DOGFOOD_RUNTIME_NAME,
         SERVICE_PORT: String(SERVICE_CONTAINER_PORT),
         ROUTE_OWNING_SERVICES: formatRouteOwnershipEnvironment()
@@ -425,6 +435,7 @@ exports.handler = async (event) => {
     secrets.productAuthHmac.grantRead(taskDefinition.executionRole!);
     secrets.oauthStateSigning.grantRead(taskDefinition.executionRole!);
     secrets.trustedUserBootstrap.grantRead(taskDefinition.executionRole!);
+    secrets.googleOAuthClientSecret.grantRead(taskRole);
     container.addPortMappings({
       containerPort: SERVICE_CONTAINER_PORT
     });

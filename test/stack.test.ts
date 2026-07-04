@@ -251,7 +251,7 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
   template.resourceCountIs("AWS::ECS::Cluster", 1);
   template.resourceCountIs("AWS::ECS::Service", 1);
   template.resourceCountIs("AWS::ECS::TaskDefinition", 1);
-  template.resourceCountIs("AWS::SecretsManager::Secret", 3);
+  template.resourceCountIs("AWS::SecretsManager::Secret", 4);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::Listener", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::ListenerRule", 1);
@@ -385,6 +385,10 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
             Value: "300"
           },
           {
+            Name: "GOOGLE_OAUTH_CLIENT_SECRET_REF",
+            Value: "ai-assist-dev-us-west-2-google-oauth-client-secret"
+          },
+          {
             Name: "SERVICE_NAME",
             Value: "dogfood-runtime"
           },
@@ -423,6 +427,13 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
   });
   template.hasResourceProperties("AWS::SecretsManager::Secret", {
     Name: "ai-assist-dev-us-west-2-trusted-user-bootstrap-secret",
+    GenerateSecretString: {
+      PasswordLength: 48,
+      ExcludePunctuation: true
+    }
+  });
+  template.hasResourceProperties("AWS::SecretsManager::Secret", {
+    Name: "ai-assist-dev-us-west-2-google-oauth-client-secret",
     GenerateSecretString: {
       PasswordLength: 48,
       ExcludePunctuation: true
@@ -512,6 +523,8 @@ test("synthesizes service roles and scoped IAM policy statements", () => {
   assert.ok(JSON.stringify(policies).includes("SessionSecretsTable"));
   assert.ok(JSON.stringify(authPolicy).includes("dynamodb:PutItem"));
   assert.ok(JSON.stringify(authPolicy).includes("kms:Encrypt"));
+  assert.ok(JSON.stringify(policies).includes("secretsmanager:GetSecretValue"));
+  assert.ok(JSON.stringify(policies).includes("GoogleOAuthClientSecret"));
   assert.equal(JSON.stringify(googleDocsPolicy).includes("dynamodb:PutItem"), false);
   assert.equal(JSON.stringify(googleDocsPolicy).includes("dynamodb:UpdateItem"), false);
   assert.equal(JSON.stringify(googleDocsPolicy).includes("dynamodb:DeleteItem"), false);

@@ -29,8 +29,9 @@ The current CDK app creates:
 - HTTP API command routes with JWT authorizer wiring and VPC link integrations through an internal ALB to one shared dogfood ECS/Fargate runtime.
 - Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same runtime path.
 - Service IAM roles with table and KMS grants derived from the IAM boundary matrix.
-- Generated Secrets Manager secrets for dogfood product-session HMAC signing
-  Google OAuth state signing, and trusted-user bootstrap login.
+- Generated Secrets Manager secrets for dogfood product-session HMAC signing,
+  Google OAuth state signing, trusted-user bootstrap login, and the Google
+  OAuth client secret reference.
 - A shared dogfood runtime task role with the union of current MVP service data-plane grants; per-service IAM roles remain synthesized for ownership boundaries and future runtime split-out.
 - Default API Gateway throttling based on the route rate-limit tiers.
 
@@ -173,6 +174,12 @@ Google OAuth state signing.
 `TRUSTED_USER_BOOTSTRAP_SECRET` is also generated and injected as an ECS secret;
 retrieve it from Secrets Manager when you need to call `/auth/login` in the
 trusted-user dev stack.
+`GOOGLE_OAUTH_CLIENT_SECRET_REF` is injected as the name of a CDK-managed
+Secrets Manager secret. CDK creates the secret with a generated placeholder
+value so the stack can deploy without plaintext credentials; replace that value
+after deploy with the real Google OAuth client secret. Do not place the Google
+client secret value in `cdk.context.json`, `.env`, shell command history, or the
+ECS task definition.
 `TrustedUserTenantId` is injected as `TRUSTED_USER_TENANT_ID`; it is not a
 secret, but it should be stable for a target so issued sessions and stored
 tenant-scoped records agree on the same tenant identifier.
@@ -294,6 +301,9 @@ stacks, and `GOOGLE_OAUTH_CALLBACK_URL` must resolve to
 Secret-bearing values are references such as ARNs or aliases, not plaintext
 credentials. Service task definitions receive resource-derived table names and
 the shared app KMS key reference from the stack.
+For the deployed dogfood runtime, CDK injects
+`GOOGLE_OAUTH_CLIENT_SECRET_REF=ai-assist-<target>-<region>-google-oauth-client-secret`
+and grants the task role permission to read that secret at runtime.
 
 For local development:
 
