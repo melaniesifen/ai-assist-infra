@@ -6,8 +6,6 @@ export interface TargetDeploymentConfig {
   readonly hostedZoneId: string;
   readonly hostedZoneName: string;
   readonly sseDomainName: string;
-  readonly productAuthIssuer: string;
-  readonly productAuthAudience: string;
   readonly allowedProductUsers: readonly AllowedProductUserConfig[];
   readonly trustedUserTenantId: string;
   readonly trustedUserUserId: string;
@@ -46,8 +44,6 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const hostedZoneName = normalizeDomainName(requireString(value.hostedZoneName, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneName`));
   const sseDomainName = normalizeDomainName(requireString(value.sseDomainName, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.sseDomainName`));
   const edgeJwtAuthEnabled = value.edgeJwtAuthEnabled !== undefined ? requireBoolean(value.edgeJwtAuthEnabled, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled`) : true;
-  const productAuthIssuer = optionalString(value.productAuthIssuer);
-  const productAuthAudience = optionalString(value.productAuthAudience);
   const allowedProductUsers = parseAllowedProductUsers(value.allowedProductUsers, environmentName);
   const trustedUserTenantId = requireString(value.trustedUserTenantId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserTenantId`);
   const trustedUserUserId = requireString(value.trustedUserUserId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserUserId`);
@@ -74,19 +70,10 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   if (!edgeJwtAuthEnabled && environmentName !== "dev") {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled may be false only for dev`);
   }
-  if (productAuthIssuer) {
-    validateHttpsUrl(productAuthIssuer, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthIssuer`);
-  }
-  if (edgeJwtAuthEnabled && allowedProductUsers.length === 0) {
-    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.allowedProductUsers must include at least one active allowed user when edgeJwtAuthEnabled is true`);
-  }
-
   return {
     hostedZoneId,
     hostedZoneName,
     sseDomainName,
-    productAuthIssuer,
-    productAuthAudience,
     allowedProductUsers,
     trustedUserTenantId,
     trustedUserUserId,
@@ -150,10 +137,6 @@ function requireString(value: unknown, fieldName: string): string {
   return value.trim();
 }
 
-function optionalString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
 function requireBoolean(value: unknown, fieldName: string): boolean {
   if (typeof value !== "boolean") {
     throw new Error(`${fieldName} must be a boolean`);
@@ -184,17 +167,6 @@ function normalizeHttpsOrigin(value: string, fieldName: string): string {
     throw new Error(`${fieldName} must be an https origin URL without path, query, fragment, credentials, or port`);
   }
   return parsed.origin;
-}
-
-function validateHttpsUrl(value: string, fieldName: string): void {
-  try {
-    const issuer = new URL(value);
-    if (issuer.protocol !== "https:") {
-      throw new Error("issuer must use https");
-    }
-  } catch {
-    throw new Error(`${fieldName} must be an https URL`);
-  }
 }
 
 export function getWebAppDomainName(webAppBaseUrl: string): string {

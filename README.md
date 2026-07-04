@@ -10,7 +10,8 @@ DynamoDB, KMS, IAM boundary, and rate-limit contracts.
 ## Current Contents
 
 - `bin/ai-assist-infra.ts`: CDK app entry point.
-- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP route integrations, a shared CDK-built dogfood Fargate runtime, a private API ALB for API Gateway VPC link traffic, a public HTTPS ALB for SSE, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
+- `src/stacks/ai-assist-product-auth-stack.ts`: target-scoped Cognito User Pool, public app client, owner/member groups, and product-auth outputs.
+- `src/stacks/ai-assist-infra-stack.ts`: MVP runtime stack with HTTP route integrations, a shared CDK-built dogfood Fargate runtime, a private API ALB for API Gateway VPC link traffic, a public HTTPS ALB for SSE, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
 - `docker/python-service/`: shared Python service image build context. The image
   installs and compiles the selected service package, serves a metadata-only
   `/health` endpoint, and delegates product routes to a service-provided
@@ -26,7 +27,7 @@ The current CDK app creates:
 
 - One shared customer-managed KMS app key and alias per deployment target for OAuth tokens, session secrets, proposed actions, and future user secrets.
 - DynamoDB tables for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session event replay metadata.
-- HTTP API command routes with Cognito/OIDC JWT authorizer wiring and VPC link integrations through an internal ALB to one shared dogfood ECS/Fargate runtime.
+- A target-scoped product-auth stack with Cognito User Pool, public app client, owner/member groups, issuer/audience/user-pool outputs, and HTTP API command routes in the runtime stack that import those values for Cognito/OIDC JWT authorizer wiring.
 - Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same runtime path.
 - Static web app hosting for the target `WebAppBaseUrl` host using a private S3
   assets bucket, CloudFront, a CloudFront ACM certificate, and Route 53 alias
@@ -79,14 +80,15 @@ or when service-owned runtime isolation becomes more important than dev cost.
 ## Deployment Targets
 
 The CDK app synthesizes three initial runtime targets from
-`src/config/environments.ts`. Each runtime stack also has a companion
-`us-east-1` certificate stack for the CloudFront web alias:
+`src/config/environments.ts`. Each target has a product-auth stack, a runtime
+stack, and a companion `us-east-1` certificate stack for the CloudFront web
+alias:
 
-| Target | Region | Account Source | Runtime Stack | Web Certificate Stack | Default Removal Posture |
-| --- | --- | --- | --- | --- | --- |
-| `dev` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistDevInfraStack` | `AiAssistDevWebCertificateStack` | cleanup-friendly |
-| `gamma` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistGammaInfraStack` | `AiAssistGammaWebCertificateStack` | retain/protect |
-| `prod` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistProdInfraStack` | `AiAssistProdWebCertificateStack` | retain/protect |
+| Target | Region | Account Source | Product Auth Stack | Runtime Stack | Web Certificate Stack | Default Removal Posture |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dev` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistDevAuthStack` | `AiAssistDevInfraStack` | `AiAssistDevWebCertificateStack` | cleanup-friendly |
+| `gamma` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistGammaAuthStack` | `AiAssistGammaInfraStack` | `AiAssistGammaWebCertificateStack` | retain/protect |
+| `prod` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistProdAuthStack` | `AiAssistProdInfraStack` | `AiAssistProdWebCertificateStack` | retain/protect |
 
 `stage` and `staging` are accepted as aliases for `gamma`. Add later stages or
 regions by editing the typed target list, not by copying stack code. Deployable
@@ -128,9 +130,10 @@ The typed route inventory covers:
 
 HTTP command routes synthesize with API Gateway JWT authorization, VPC link
 integrations, request/correlation ID header propagation, and one shared ALB
-HTTP listener. CDK provisions a Cognito User Pool and public app client per
-target, exposes issuer/audience outputs, and configures API Gateway JWT
-authorizers from those values. Authenticated integrations forward only the
+HTTP listener. The target's product-auth stack provisions the Cognito User Pool
+and public app client, exposes issuer/audience/user-pool outputs, and the
+runtime stack configures API Gateway JWT authorizers from those imported stack
+values. Authenticated integrations forward only the
 validated JWT `sub` claim as `x-ai-assist-auth-subject`; backend services map
 that subject to allowed product users before deriving `tenantId` and `userId`.
 Route metadata still records the owning service. The only API Gateway product-route edge auth
@@ -194,8 +197,6 @@ HostedZoneId
 HostedZoneName
 SseDomainName
 EdgeJwtAuthEnabled
-ProductAuthIssuer
-ProductAuthAudience
 TrustedUserTenantId
 TrustedUserUserId
 TrustedUserAuthSubject
@@ -224,10 +225,13 @@ ECS task definition.
 `GOOGLE_OAUTH_CALLBACK_URL` is derived from the generated HTTP API endpoint as
 `${API_BASE_URL}/oauth/google/callback`.
 `PRODUCT_AUTH_ISSUER` and `PRODUCT_AUTH_AUDIENCE` are injected from the
-target's CDK-managed Cognito User Pool issuer and app client id. The stack also
-outputs both values for local client/test configuration.
+target's CDK-managed product-auth stack. The auth stack outputs issuer,
+audience, and user pool id for local client/test configuration.
 `AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON` is injected from ignored deployment
 context and maps Cognito subjects to allowed product tenant/user identities.
+The list may be empty while deploying the product-auth stack before real
+Cognito users exist; that state is a fail-closed bootstrap posture and is not
+valid dogfood proof.
 `PLATFORM_PROVIDER_SECRET_REF_OPENAI` and
 `PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC` are injected as names of CDK-managed
 Secrets Manager placeholder secrets. Replace only the provider secret values you
@@ -278,10 +282,10 @@ web app CloudFront distribution. These values are not service secrets, but they
 are account/environment-specific and should stay out of source control.
 
 `edgeJwtAuthEnabled` defaults to `true`. It may be set to `false` only for the
-`dev` target to run an infrastructure health deploy before a real product auth
-issuer is ready to be exercised. CDK still provisions the Cognito User Pool and
-app client and injects their issuer/audience into the runtime, but the bypass
-removes the API Gateway JWT authorizer and leaves API Gateway routes
+`dev` target to run an infrastructure health deploy before real Cognito users
+and allowed-user subject mappings are ready to be exercised. CDK still
+provisions the product-auth stack and injects its issuer/audience into the
+runtime, but the bypass removes the API Gateway JWT authorizer and leaves API Gateway routes
 unauthenticated at the edge. It must not be used as evidence that the
 trusted-user product loop is dogfood-ready; Cognito-backed product auth is still
 required before personal end-to-end use.
@@ -306,8 +310,6 @@ Example local context shape:
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.dev.example.test",
       "edgeJwtAuthEnabled": false,
-      "productAuthIssuer": "https://auth.dev.example.test/",
-      "productAuthAudience": "ai-assist-dev",
       "allowedProductUsers": [
         {
           "authSubject": "replace-with-dev-cognito-subject-a",
@@ -335,13 +337,27 @@ Example local context shape:
 ```
 
 After local context is populated, the deploy command does not need service image
-URI, auth, or certificate parameters. Deploy the target's web certificate stack
-with the runtime stack so CloudFront receives a valid `us-east-1` certificate:
+URI, auth, or certificate parameters. Deploy the target's product-auth stack
+first so Cognito users can be created and their `sub` values can be copied into
+ignored `cdk.context.json`; then deploy the runtime stack with its web
+certificate stack so CloudFront receives a valid `us-east-1` certificate:
 
 ```sh
 npm run build
+npx cdk deploy AiAssistDevAuthStack
+aws cognito-idp list-users \
+  --user-pool-id "$(aws cloudformation describe-stacks \
+    --stack-name AiAssistDevAuthStack \
+    --query 'Stacks[0].Outputs[?OutputKey==`ProductAuthUserPoolId`].OutputValue' \
+    --output text)" \
+  --query 'Users[].{Username:Username,Sub:Attributes[?Name==`sub`]|[0].Value,Status:UserStatus,Enabled:Enabled}' \
+  --output table
 npx cdk deploy AiAssistDevWebCertificateStack AiAssistDevInfraStack
 ```
+
+The `aws cognito-idp list-users` command is metadata-only: it returns usernames,
+subjects, status, and enabled state. Do not print, log, or commit passwords,
+tokens, OAuth secrets, provider keys, or raw user credentials.
 
 ## Static Web App Hosting
 

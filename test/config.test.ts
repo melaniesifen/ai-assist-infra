@@ -750,8 +750,6 @@ test("parses local deployment config from CDK context without exposing secrets",
         hostedZoneName: "example.test",
         sseDomainName: "sse.dev.example.test",
         edgeJwtAuthEnabled: true,
-        productAuthIssuer: "https://auth.dev.example.test/",
-        productAuthAudience: "ai-assist-dev",
         allowedProductUsers: [
           {
             authSubject: "cognito-subject-a",
@@ -777,9 +775,6 @@ test("parses local deployment config from CDK context without exposing secrets",
     },
     "dev"
   );
-
-  assert.equal(config.productAuthAudience, "ai-assist-dev");
-  assert.equal(config.productAuthIssuer, "https://auth.dev.example.test/");
   assert.equal(config.allowedProductUsers.length, 2);
   assert.equal(config.allowedProductUsers[0].authSubject, "cognito-subject-a");
   assert.equal(config.trustedUserTenantId, "dev-tenant");
@@ -797,7 +792,6 @@ test("parses local deployment config from CDK context without exposing secrets",
           hostedZoneName: "example.test",
           sseDomainName: "sse.dev.example.test",
           edgeJwtAuthEnabled: false,
-          productAuthAudience: "ai-assist-dev",
           allowedProductUsers: [],
           trustedUserTenantId: "dev-tenant",
           trustedUserUserId: "dev-user",
@@ -810,6 +804,26 @@ test("parses local deployment config from CDK context without exposing secrets",
     ).edgeJwtAuthEnabled,
     false
   );
+  assert.equal(
+    parseDeploymentConfigContext(
+      {
+        dev: {
+          hostedZoneId: "Z1234567890ABC",
+          hostedZoneName: "example.test",
+          sseDomainName: "sse.dev.example.test",
+          edgeJwtAuthEnabled: true,
+          allowedProductUsers: [],
+          trustedUserTenantId: "dev-tenant",
+          trustedUserUserId: "dev-user",
+          trustedUserAuthSubject: "trusted-user:dev-user",
+          webAppBaseUrl: "https://dev.example.test",
+          googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com"
+        }
+      },
+      "dev"
+    ).allowedProductUsers.length,
+    0
+  );
   assert.throws(() => parseDeploymentConfigContext({}, "dev"), new RegExp(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.dev is required`));
   assert.throws(
     () =>
@@ -820,8 +834,6 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneName: "example.test",
             sseDomainName: "sse.dev.example.test",
             edgeJwtAuthEnabled: true,
-            productAuthIssuer: "http://auth.dev.example.test/",
-            productAuthAudience: "ai-assist-dev",
             allowedProductUsers: [
               {
                 authSubject: "cognito-subject-a",
@@ -851,8 +863,6 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneName: "example.test",
             sseDomainName: "sse.other.test",
             edgeJwtAuthEnabled: true,
-            productAuthIssuer: "https://auth.dev.example.test/",
-            productAuthAudience: "ai-assist-dev",
             allowedProductUsers: [
               {
                 authSubject: "cognito-subject-a",
@@ -882,8 +892,6 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneName: "example.test",
             sseDomainName: "sse.dev.example.test",
             edgeJwtAuthEnabled: true,
-            productAuthIssuer: "https://auth.dev.example.test/",
-            productAuthAudience: "ai-assist-dev",
             allowedProductUsers: [
               {
                 authSubject: "cognito-subject-a",
@@ -913,8 +921,6 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneName: "example.test",
             sseDomainName: "sse.dev.example.test",
             edgeJwtAuthEnabled: true,
-            productAuthIssuer: "https://auth.dev.example.test/",
-            productAuthAudience: "ai-assist-dev",
             allowedProductUsers: [
               {
                 authSubject: "cognito-subject-a",
@@ -951,8 +957,6 @@ test("parses local deployment config from CDK context without exposing secrets",
               hostedZoneName: "example.test",
               sseDomainName: "sse.dev.example.test",
               edgeJwtAuthEnabled: true,
-              productAuthIssuer: "https://auth.dev.example.test/",
-              productAuthAudience: "ai-assist-dev",
               allowedProductUsers: [
                 {
                   authSubject: "cognito-subject-a",
@@ -984,7 +988,6 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneName: "example.test",
             sseDomainName: "sse.gamma.example.test",
             edgeJwtAuthEnabled: false,
-            productAuthAudience: "ai-assist-gamma",
             allowedProductUsers: [
               {
                 authSubject: "cognito-subject-a",

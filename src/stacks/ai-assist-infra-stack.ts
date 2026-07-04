@@ -4,7 +4,6 @@ import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as cloudfrontOrigins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
-import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecrAssets from "aws-cdk-lib/aws-ecr-assets";
@@ -30,6 +29,7 @@ import { KMS_PURPOSES, KmsPurpose, getTargetSharedKmsAlias, listKmsPurposeMappin
 import { OPERATIONAL_ALARMS, OPERATIONAL_METRICS } from "../config/operational-guardrails";
 import { buildDefaultRouteRateLimits } from "../config/rate-limits";
 import { SERVICE_ROUTES, SERVICES, ServiceName } from "../config/service-routes";
+import { ProductAuthResources } from "./ai-assist-product-auth-stack";
 
 const SERVICE_CONTAINER_PORT = 8080;
 const SSE_IDLE_TIMEOUT_SECONDS = 900;
@@ -45,17 +45,13 @@ export interface AiAssistInfraStackProps extends cdk.StackProps {
   readonly environmentName?: string;
   readonly deploymentTarget?: DeploymentTarget;
   readonly deploymentConfig?: TargetDeploymentConfig;
+  readonly productAuth?: ProductAuthResources;
   readonly webAppCertificate?: acm.ICertificate;
 }
 
 interface ServiceRuntimeInfrastructure {
   readonly vpcLink: apigatewayv2.CfnVpcLink;
   readonly sharedHttpListener: elbv2.ApplicationListener;
-}
-
-interface ProductAuthResources {
-  readonly issuer: string;
-  readonly audience: string;
 }
 
 type RuntimeSecretName =
@@ -87,16 +83,18 @@ export class AiAssistInfraStack extends cdk.Stack {
     if (!props.webAppCertificate) {
       throw new Error("webAppCertificate is required for CloudFront static web app hosting");
     }
+    if (!props.productAuth) {
+      throw new Error("productAuth is required from the target product-auth stack");
+    }
     const environmentName = normalizeEnvironmentName(deploymentTarget.environmentName);
     const keys = this.createKmsKeys(deploymentTarget);
     const tables = this.createDynamoDbTables(deploymentTarget, keys);
     const secrets = this.createRuntimeSecrets(deploymentTarget);
     const serviceRoles = this.createServiceRoles(tables, keys);
     const api = this.createHttpApi(deploymentTarget);
-    const productAuth = this.createProductAuthResources(deploymentTarget, deploymentConfig);
     const webAppHosting = this.createWebAppHosting(deploymentTarget, deploymentConfig, props.webAppCertificate);
-    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, api.attrApiEndpoint, deploymentConfig, productAuth);
-    this.createHttpRouteInventory(api, deploymentTarget, runtime, deploymentConfig, productAuth);
+    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, api.attrApiEndpoint, deploymentConfig, props.productAuth);
+    this.createHttpRouteInventory(api, deploymentTarget, runtime, deploymentConfig, props.productAuth);
     this.createOperationalAlarms(deploymentTarget);
 
     cdk.Tags.of(this).add("ai-assist:environment", environmentName);
@@ -125,37 +123,14 @@ export class AiAssistInfraStack extends cdk.Stack {
       value: webAppHosting.distribution.distributionId
     });
     new cdk.CfnOutput(this, "ProductAuthIssuer", {
-      value: productAuth.issuer
+      value: props.productAuth.issuer
     });
     new cdk.CfnOutput(this, "ProductAuthAudience", {
-      value: productAuth.audience
+      value: props.productAuth.audience
     });
-  }
-
-  private createProductAuthResources(deploymentTarget: DeploymentTarget, deploymentConfig: TargetDeploymentConfig): ProductAuthResources {
-    void deploymentConfig;
-    const userPool = new cognito.UserPool(this, "ProductAuthUserPool", {
-      userPoolName: buildTargetResourceName(deploymentTarget, "product-auth-users"),
-      selfSignUpEnabled: false,
-      signInAliases: {
-        email: true
-      },
-      removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+    new cdk.CfnOutput(this, "ProductAuthUserPoolId", {
+      value: props.productAuth.userPoolId
     });
-    const appClient = userPool.addClient("ProductAuthAppClient", {
-      userPoolClientName: buildTargetResourceName(deploymentTarget, "product-auth-app-client"),
-      generateSecret: false,
-      authFlows: {
-        userSrp: true
-      },
-      preventUserExistenceErrors: true,
-      accessTokenValidity: cdk.Duration.hours(1),
-      idTokenValidity: cdk.Duration.hours(1)
-    });
-    return {
-      issuer: cdk.Fn.join("", ["https://cognito-idp.", cdk.Stack.of(this).region, ".amazonaws.com/", userPool.userPoolId]),
-      audience: appClient.userPoolClientId
-    };
   }
 
   private createWebAppHosting(

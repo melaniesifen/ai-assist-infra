@@ -3,6 +3,7 @@ import * as cdk from "aws-cdk-lib";
 import { DEPLOYMENT_CONFIG_CONTEXT_KEY, parseDeploymentConfigContext } from "../src/config/deployment-config";
 import { listDeploymentTargets } from "../src/config/environments";
 import { AiAssistInfraStack } from "../src/stacks/ai-assist-infra-stack";
+import { AiAssistProductAuthStack } from "../src/stacks/ai-assist-product-auth-stack";
 import { AiAssistWebCertificateStack } from "../src/stacks/ai-assist-web-certificate-stack";
 
 const CLOUDFRONT_CERTIFICATE_REGION = "us-east-1";
@@ -20,6 +21,14 @@ for (const target of targets) {
 for (const target of targets) {
   const account = process.env[target.accountEnvVar] ?? target.fallbackAccount;
   const deploymentConfig = parseDeploymentConfigContext(app.node.tryGetContext(DEPLOYMENT_CONFIG_CONTEXT_KEY), target.environmentName);
+  const authStack = new AiAssistProductAuthStack(app, authStackName(target.stackName), {
+    deploymentTarget: target,
+    env: {
+      account,
+      region: target.region
+    },
+    stackName: authStackName(target.stackName)
+  });
   const certificateStack = new AiAssistWebCertificateStack(app, webCertificateStackName(target.stackName), {
     deploymentTarget: target,
     deploymentConfig,
@@ -33,6 +42,7 @@ for (const target of targets) {
   const infraStack = new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
     deploymentConfig,
+    productAuth: authStack.productAuth,
     webAppCertificate: certificateStack.certificate,
     crossRegionReferences: true,
     env: {
@@ -41,7 +51,12 @@ for (const target of targets) {
     },
     stackName: target.stackName
   });
+  infraStack.addDependency(authStack);
   infraStack.addDependency(certificateStack);
+}
+
+function authStackName(infraStackName: string): string {
+  return infraStackName.replace(/InfraStack$/, "AuthStack");
 }
 
 function webCertificateStackName(infraStackName: string): string {

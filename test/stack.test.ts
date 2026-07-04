@@ -10,6 +10,7 @@ import { OPERATIONAL_ALARMS } from "../src/config/operational-guardrails";
 import { SERVICE_ROUTES } from "../src/config/service-routes";
 import type { TargetDeploymentConfig } from "../src/config/deployment-config";
 import { AiAssistInfraStack } from "../src/stacks/ai-assist-infra-stack";
+import { AiAssistProductAuthStack, ProductAuthResources } from "../src/stacks/ai-assist-product-auth-stack";
 import { AiAssistWebCertificateStack } from "../src/stacks/ai-assist-web-certificate-stack";
 
 const TEST_DEPLOYMENT_CONFIG: TargetDeploymentConfig = {
@@ -17,8 +18,6 @@ const TEST_DEPLOYMENT_CONFIG: TargetDeploymentConfig = {
   hostedZoneName: "example.test",
   sseDomainName: "sse.dev.example.test",
   edgeJwtAuthEnabled: true,
-  productAuthIssuer: "https://auth.test.example/",
-  productAuthAudience: "ai-assist-test",
   allowedProductUsers: [
     {
       authSubject: "cognito-subject-a",
@@ -44,9 +43,13 @@ const TEST_DEPLOYMENT_CONFIG: TargetDeploymentConfig = {
 
 const TEST_DEV_EDGE_AUTH_DISABLED_CONFIG = {
   ...TEST_DEPLOYMENT_CONFIG,
-  edgeJwtAuthEnabled: false,
-  productAuthIssuer: "",
-  productAuthAudience: "ai-assist-dev"
+  edgeJwtAuthEnabled: false
+};
+
+const TEST_PRODUCT_AUTH: ProductAuthResources = {
+  issuer: "https://cognito-idp.us-west-2.amazonaws.com/test-user-pool",
+  audience: "test-product-auth-client",
+  userPoolId: "test-user-pool"
 };
 
 function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): Template {
@@ -54,6 +57,7 @@ function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): T
   const stack = new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
     deploymentConfig: TEST_DEPLOYMENT_CONFIG,
+    productAuth: TEST_PRODUCT_AUTH,
     webAppCertificate: testWebAppCertificate(app, target),
     stackName: target.stackName,
     env: {
@@ -69,6 +73,7 @@ function synthTemplateWithDeploymentConfig(deploymentConfig: TargetDeploymentCon
   const stack = new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
     deploymentConfig,
+    productAuth: TEST_PRODUCT_AUTH,
     webAppCertificate: testWebAppCertificate(app, target),
     stackName: target.stackName,
     env: {
@@ -84,6 +89,7 @@ function synthStack(target: DeploymentTarget): cdk.Stack {
   return new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
     deploymentConfig: TEST_DEPLOYMENT_CONFIG,
+    productAuth: TEST_PRODUCT_AUTH,
     webAppCertificate: testWebAppCertificate(app, target),
     stackName: target.stackName,
     env: {
@@ -180,6 +186,67 @@ test("synthesizes CloudFront web app certificates in us-east-1 without deprecate
   });
 });
 
+test("synthesizes product auth as a target-scoped stack", () => {
+  const target = listDeploymentTargets()[0];
+  const app = new cdk.App();
+  const stack = new AiAssistProductAuthStack(app, "AiAssistDevAuthStack", {
+    deploymentTarget: target,
+    stackName: "AiAssistDevAuthStack",
+    env: {
+      account: "111111111111",
+      region: target.region
+    }
+  });
+  const template = Template.fromStack(stack);
+
+  assert.equal(stack.stackName, "AiAssistDevAuthStack");
+  template.hasResourceProperties("AWS::Cognito::UserPool", {
+    UserPoolName: "ai-assist-dev-us-west-2-product-auth-users"
+  });
+  template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+    UserPoolId: {
+      Ref: Match.stringLikeRegexp("ProductAuthUserPool")
+    },
+    GenerateSecret: false,
+    PreventUserExistenceErrors: "ENABLED"
+  });
+  template.hasResourceProperties("AWS::Cognito::UserPoolGroup", {
+    GroupName: "owner"
+  });
+  template.hasResourceProperties("AWS::Cognito::UserPoolGroup", {
+    GroupName: "member"
+  });
+  template.hasOutput("ProductAuthIssuer", {
+    Value: Match.anyValue()
+  });
+  template.hasOutput("ProductAuthAudience", {
+    Value: {
+      Ref: Match.stringLikeRegexp("ProductAuthUserPoolProductAuthAppClient")
+    }
+  });
+  template.hasOutput("ProductAuthUserPoolId", {
+    Value: {
+      Ref: Match.stringLikeRegexp("ProductAuthUserPool")
+    }
+  });
+});
+
+test("runtime infra stack imports product auth resources", () => {
+  const template = synthTemplate();
+
+  template.resourceCountIs("AWS::Cognito::UserPool", 0);
+  template.resourceCountIs("AWS::Cognito::UserPoolClient", 0);
+  template.hasResourceProperties("AWS::ApiGatewayV2::Authorizer", {
+    JwtConfiguration: {
+      Audience: ["test-product-auth-client"],
+      Issuer: "https://cognito-idp.us-west-2.amazonaws.com/test-user-pool"
+    }
+  });
+  template.hasOutput("ProductAuthUserPoolId", {
+    Value: "test-user-pool"
+  });
+});
+
 test("synthesizes DynamoDB tables from the canonical table specs", () => {
   const template = synthTemplate();
 
@@ -265,12 +332,8 @@ test("synthesizes the HTTP and SSE route inventory", () => {
     AuthorizerType: "JWT",
     IdentitySource: ["$request.header.Authorization"],
     JwtConfiguration: {
-      Audience: [
-        {
-          Ref: Match.stringLikeRegexp("ProductAuthUserPoolProductAuthAppClient")
-        }
-      ],
-      Issuer: Match.anyValue()
+      Audience: ["test-product-auth-client"],
+      Issuer: "https://cognito-idp.us-west-2.amazonaws.com/test-user-pool"
     }
   });
   template.hasResourceProperties("AWS::ApiGatewayV2::Integration", {
@@ -282,16 +345,6 @@ test("synthesizes the HTTP and SSE route inventory", () => {
       "overwrite:header.x-correlation-id": "$context.requestId",
       "overwrite:header.x-ai-assist-auth-subject": "$context.authorizer.jwt.claims.sub"
     })
-  });
-  template.hasResourceProperties("AWS::Cognito::UserPool", {
-    UserPoolName: "ai-assist-dev-us-west-2-product-auth-users"
-  });
-  template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
-    UserPoolId: {
-      Ref: Match.stringLikeRegexp("ProductAuthUserPool")
-    },
-    GenerateSecret: false,
-    PreventUserExistenceErrors: "ENABLED"
   });
   template.hasResourceProperties("AWS::Lambda::Function", {
     FunctionName: "ai-assist-dev-us-west-2-health-placeholder",
@@ -355,8 +408,8 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
   template.resourceCountIs("AWS::ECS::Service", 1);
   template.resourceCountIs("AWS::ECS::TaskDefinition", 1);
   template.resourceCountIs("AWS::SecretsManager::Secret", 6);
-  template.resourceCountIs("AWS::Cognito::UserPool", 1);
-  template.resourceCountIs("AWS::Cognito::UserPoolClient", 1);
+  template.resourceCountIs("AWS::Cognito::UserPool", 0);
+  template.resourceCountIs("AWS::Cognito::UserPoolClient", 0);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::Listener", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::ListenerRule", 1);

@@ -5,8 +5,6 @@
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.dev.example.test",
       "edgeJwtAuthEnabled": false,
-      "productAuthIssuer": "https://auth.dev.example.test/",
-      "productAuthAudience": "ai-assist-dev",
       "allowedProductUsers": [
         {
           "authSubject": "replace-with-dev-cognito-subject-a",
@@ -34,8 +32,6 @@
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.gamma.example.test",
       "edgeJwtAuthEnabled": true,
-      "productAuthIssuer": "https://auth.gamma.example.test/",
-      "productAuthAudience": "ai-assist-gamma",
       "allowedProductUsers": [
         {
           "authSubject": "replace-with-gamma-cognito-subject-a",
@@ -56,8 +52,6 @@
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.example.test",
       "edgeJwtAuthEnabled": true,
-      "productAuthIssuer": "https://auth.example.test/",
-      "productAuthAudience": "ai-assist-prod",
       "allowedProductUsers": [
         {
           "authSubject": "replace-with-prod-cognito-subject-a",

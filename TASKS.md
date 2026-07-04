@@ -64,9 +64,10 @@ Relevant LLDs:
 - [x] M9-T9 route/runtime contract slice: align the typed route inventory and assertions to canonical deployed-dev paths: `/oauth/google/*`, `/sessions/{sessionId}/events`, auth login/logout/session, resource-session commands/actions/apply, and `GET /health` as the only intentionally placeholder-backed route.
 - [x] M9-T9 route/runtime contract slice: document the API Gateway JWT/OIDC issuer, audience, and JWKS discovery requirements plus the trusted-user login and OAuth callback edge-auth exceptions that must be validated by the auth service.
 - [x] Add a dev-only `edgeJwtAuthEnabled=false` infra-health bypass for API Gateway JWT authorizer creation while keeping gamma/prod edge auth strict.
-- [x] M11-T2: Provision target-scoped Cognito User Pools and app clients,
-  expose product-auth issuer/audience outputs, and wire API Gateway JWT
-  authorizers to those Cognito values.
+- [x] M11-T2: Provision target-scoped Cognito User Pools and app clients in a
+  separate product-auth stack, expose product-auth issuer/audience/user-pool
+  outputs, and wire the runtime stack's API Gateway JWT authorizers to those
+  imported Cognito values.
 - [x] M11-T2: Forward only the verified Cognito `sub` claim to the shared
   runtime for authenticated routes and inject the allowed-product-users mapping
   as runtime metadata.
@@ -86,6 +87,11 @@ Relevant LLDs:
 - [x] M11-T4 infra slice: inject quota/audit readiness into the shared dogfood
   runtime's provider status and orchestration provider-access handoff without
   exposing provider secret references in browser output.
+- [x] M11-T5.0 auth-stack bootstrap slice: split Cognito/product auth into
+  `AiAssist<target>AuthStack`, keep runtime infra dependent on imported auth
+  stack outputs, remove issuer/audience placeholders from tracked context, and
+  document a metadata-only Cognito `sub` discovery path for ignored local
+  allowed-user mappings.
 
 ## Future Production Tasks
 
