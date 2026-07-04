@@ -19,6 +19,10 @@ class RouteDispatch:
     supports_sse: bool = False
 
 
+def route(method: str, pattern: str, owning_service: str, package: str, *, supports_sse: bool = False) -> RouteDispatch:
+    return RouteDispatch(method=method, pattern=re.compile(pattern), owning_service=owning_service, package=package, supports_sse=supports_sse)
+
+
 ROUTES: tuple[RouteDispatch, ...] = (
     route("POST", r"^/auth/login$", "ai-assist-auth-service", "ai_assist_auth_service"),
     route("POST", r"^/auth/logout$", "ai-assist-auth-service", "ai_assist_auth_service"),
@@ -121,7 +125,3 @@ def json_response(status: int, code: str, message: str, service: str, path: str)
             sort_keys=True,
         ).encode("utf-8"),
     }
-
-
-def route(method: str, pattern: str, owning_service: str, package: str, *, supports_sse: bool = False) -> RouteDispatch:
-    return RouteDispatch(method=method, pattern=re.compile(pattern), owning_service=owning_service, package=package, supports_sse=supports_sse)

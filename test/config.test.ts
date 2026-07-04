@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -88,6 +89,26 @@ test("defines a dogfood runtime image that includes every service package", () =
   for (const method of new Set(SERVICE_ROUTES.filter((candidate) => !candidate.intentionallyPlaceholder).map((route) => route.method))) {
     assert.match(sharedServer, new RegExp(`def do_${method}\\(`), `shared Python server must handle ${method}`);
   }
+});
+
+test("dogfood runtime dispatcher imports and handles the SSE route", () => {
+  const script = [
+    "import ai_assist_dogfood_runtime.http_app as app",
+    "response = app.handle_http_request(method='GET', path='/sessions/test-session/events')",
+    "assert response['status'] == 200, response",
+    "assert response['headers']['Content-Type'] == 'text/event-stream', response",
+    "assert b'dogfood runtime sse path ready' in response['body'], response"
+  ].join("; ");
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
 test("parses local deployment config from CDK context without exposing secrets", () => {
