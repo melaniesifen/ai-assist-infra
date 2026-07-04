@@ -344,6 +344,10 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
             Value: "https://app.test.example"
           },
           {
+            Name: "API_BASE_URL",
+            Value: Match.anyValue()
+          },
+          {
             Name: "TRUSTED_USER_TENANT_ID",
             Value: "test-tenant"
           },

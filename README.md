@@ -182,6 +182,8 @@ bootstrap mode it can be a stable local subject such as `trusted-user:dev-user`.
 `WebAppBaseUrl` is injected as `WEB_APP_BASE_URL` and should be the HTTPS origin
 where the target's web app is hosted, for example
 `https://dev.example.test` for dev dogfood.
+`API_BASE_URL` is not a local context value; CDK derives it from the generated
+HTTP API endpoint and injects it into the dogfood runtime.
 
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses

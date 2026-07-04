@@ -72,8 +72,9 @@ export class AiAssistInfraStack extends cdk.Stack {
     const tables = this.createDynamoDbTables(deploymentTarget, keys);
     const secrets = this.createRuntimeSecrets(deploymentTarget);
     const serviceRoles = this.createServiceRoles(tables, keys);
-    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, deploymentConfig);
-    const api = this.createHttpRouteInventory(deploymentTarget, runtime, deploymentConfig);
+    const api = this.createHttpApi(deploymentTarget);
+    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, api.attrApiEndpoint, deploymentConfig);
+    this.createHttpRouteInventory(api, deploymentTarget, runtime, deploymentConfig);
     this.createOperationalAlarms(deploymentTarget);
 
     cdk.Tags.of(this).add("ai-assist:environment", environmentName);
@@ -185,12 +186,15 @@ export class AiAssistInfraStack extends cdk.Stack {
     };
   }
 
-  private createHttpRouteInventory(deploymentTarget: DeploymentTarget, runtime: ServiceRuntimeInfrastructure, deploymentConfig: TargetDeploymentConfig): apigatewayv2.CfnApi {
-    const api = new apigatewayv2.CfnApi(this, "HttpApi", {
+  private createHttpApi(deploymentTarget: DeploymentTarget): apigatewayv2.CfnApi {
+    return new apigatewayv2.CfnApi(this, "HttpApi", {
       name: buildTargetResourceName(deploymentTarget, "http-api"),
       protocolType: "HTTP",
       description: "Trusted-user HTTP command routes wired to the shared dogfood runtime for AI Assist."
     });
+  }
+
+  private createHttpRouteInventory(api: apigatewayv2.CfnApi, deploymentTarget: DeploymentTarget, runtime: ServiceRuntimeInfrastructure, deploymentConfig: TargetDeploymentConfig): void {
     const authorizer = deploymentConfig.edgeJwtAuthEnabled
       ? new apigatewayv2.CfnAuthorizer(this, "ProductSessionJwtAuthorizer", {
           apiId: api.ref,
@@ -274,7 +278,6 @@ export class AiAssistInfraStack extends cdk.Stack {
       defaultStage.addDependency(routeResource);
     }
 
-    return api;
   }
 
   private createHttpServiceIntegration(
@@ -330,6 +333,7 @@ exports.handler = async (event) => {
     tables: Record<string, dynamodb.Table>,
     keys: Record<KmsPurpose, kms.Key>,
     secrets: Record<RuntimeSecretName, secretsmanager.Secret>,
+    apiBaseUrl: string,
     deploymentConfig: TargetDeploymentConfig
   ): ServiceRuntimeInfrastructure {
     const vpc = new ec2.Vpc(this, "ServiceVpc", {
@@ -357,7 +361,7 @@ exports.handler = async (event) => {
       subnetIds: vpc.publicSubnets.map((subnet) => subnet.subnetId),
       securityGroupIds: [vpcLinkSecurityGroup.securityGroupId]
     });
-    const sharedEnvironment = this.buildSharedServiceEnvironment(deploymentTarget, tables, keys, deploymentConfig);
+    const sharedEnvironment = this.buildSharedServiceEnvironment(deploymentTarget, tables, keys, apiBaseUrl, deploymentConfig);
     const dogfoodRuntimeRole = this.createDogfoodRuntimeRole(tables, keys);
     const runtime = this.createDogfoodRuntimeService(deploymentTarget, vpc, cluster, dogfoodRuntimeRole, sharedEnvironment, secrets, vpcLinkSecurityGroup, deploymentConfig);
 
@@ -554,6 +558,7 @@ exports.handler = async (event) => {
     deploymentTarget: DeploymentTarget,
     tables: Record<string, dynamodb.Table>,
     keys: Record<KmsPurpose, kms.Key>,
+    apiBaseUrl: string,
     deploymentConfig: TargetDeploymentConfig
   ): Record<string, string> {
     const tableName = (name: string): string => tables[name]?.tableName ?? "";
@@ -561,6 +566,7 @@ exports.handler = async (event) => {
       APP_ENV: deploymentTarget.environmentName,
       AWS_REGION: deploymentTarget.region,
       WEB_APP_BASE_URL: deploymentConfig.webAppBaseUrl,
+      API_BASE_URL: apiBaseUrl,
       TRUSTED_USER_MODE: "true",
       TRUSTED_USER_TENANT_ID: deploymentConfig.trustedUserTenantId,
       TRUSTED_USER_USER_ID: deploymentConfig.trustedUserUserId,
