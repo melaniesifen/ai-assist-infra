@@ -170,6 +170,118 @@ test("dogfood runtime dispatcher normalizes lambda-style package responses", () 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
+test("dogfood runtime strips caller identity headers before adding derived identity", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+class Codec:
+    def verify_bearer(self, header):
+        assert header == "Bearer session-1", header
+        return {"session": "session-1"}
+class Identity:
+    def derive_identity(self, product_session):
+        assert product_session == {"session": "session-1"}, product_session
+        return {"tenantId": "trusted-tenant", "userId": "trusted-user", "authSubject": "trusted-subject"}
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+app._AUTH_APP = AuthApp()
+headers = {
+    "authorization": "Bearer session-1",
+    "x-ai-assist-tenant-id": "attacker-tenant",
+    "X-Ai-Assist-User-Id": "attacker-user",
+    "x-ai-assist-auth-subject": "attacker-subject",
+    "x-request-id": "req-1",
+}
+result = app.authenticated_downstream_headers(headers)
+assert result["X-Ai-Assist-Tenant-Id"] == "trusted-tenant", result
+assert result["X-Ai-Assist-User-Id"] == "trusted-user", result
+assert result["X-Ai-Assist-Auth-Subject"] == "trusted-subject", result
+assert result["x-request-id"] == "req-1", result
+assert "x-ai-assist-tenant-id" not in result, result
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood Google token provider reports account selection as validation", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+from ai_assist_google_docs_adapter.errors import GoogleDocsAdapterError
+class OAuthTokens:
+    def get_google_status(self, identity):
+        return {"accounts": [
+            {"googleAccountId": "acct-1", "isAvailable": True},
+            {"googleAccountId": "acct-2", "isAvailable": True},
+        ]}
+class AuthApp:
+    oauth_token_service = OAuthTokens()
+provider = app.AuthGoogleTokenProvider(AuthApp())
+try:
+    provider.get_access_token({"tenantId": "tenant-1", "userId": "user-1", "operation": "listResources"})
+except GoogleDocsAdapterError as error:
+    assert error.code == "VALIDATION_ERROR", error
+    assert error.http_status == 400, error
+    assert error.details == {"field": "googleAccountId"}, error
+else:
+    raise AssertionError("expected GoogleDocsAdapterError")
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-google-docs-adapter/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime loads context consent grant from server config only", () => {
+  const script = `
+import json
+import os
+import ai_assist_dogfood_runtime.http_app as app
+grant = {
+    "grantId": "grant-1",
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "provider": "google_docs",
+    "contextMode": "ACTIVE_RESOURCE",
+    "resourceRef": {"provider": "google_docs", "resourceId": "doc-1"},
+    "scopes": ["docs.read"],
+    "status": "active",
+    "grantedAt": "2026-05-29T11:00:00.000Z",
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+}
+assert app.dogfood_context_consent_grant({}, "grant-1") is None
+os.environ[app.DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENV] = json.dumps(grant)
+assert app.dogfood_context_consent_grant({}, "grant-1")["grantId"] == "grant-1"
+assert app.dogfood_context_consent_grant({}, "other-grant") is None
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test("parses local deployment config from CDK context without exposing secrets", () => {
   const config = parseDeploymentConfigContext(
     {

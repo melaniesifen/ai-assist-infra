@@ -49,6 +49,27 @@ This repo owns infrastructure shape, not application business logic. Service
 repos remain responsible for safe logging, authentication checks, context
 authorization, and secret-free responses.
 
+## M10 Dogfood Product Surface
+
+For M10, the primary owner dogfood UI is the Google Docs side-panel/browser
+extension shell in `ai-assist-web/extension`, loaded while the owner is on a
+real Google Docs document. The static web origin configured by `WebAppBaseUrl`,
+including `https://dev.melsifen-ai-assist.com` for dev, is supporting
+infrastructure for OAuth redirects, hosted assets, diagnostics, or fallback
+setup. It is not the primary in-document dogfood UI.
+
+The dev extension uses the deployed HTTP API output and public SSE base URL:
+
+- HTTP: use the deployed dev HTTP API base URL from stack output or ignored local extension config.
+- SSE: `https://sse.dev.melsifen-ai-assist.com`
+
+Endpoint locations are public browser runtime metadata, not credentials, but
+the concrete API Gateway host should stay out of tracked files. Do not place
+bootstrap secrets, bearer tokens, OAuth tokens, provider keys, cookies, raw
+document content, or local-only deployed endpoint values in CDK context,
+frontend build variables, static assets, extension config, CloudFront objects,
+or logs.
+
 The shared dogfood runtime role is a deliberate cost-control exception for this
 single-task topology. It keeps service-owned IAM roles synthesized as boundary
 documentation and future split-out targets, but the deployed dogfood task uses a
