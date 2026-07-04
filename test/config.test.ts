@@ -39,6 +39,7 @@ test("defines dev gamma and prod deployment targets in one account and region", 
 
   assert.equal(result.valid, true);
   assert.deepEqual(targets.map((target) => target.environmentName), ["dev", "gamma", "prod"]);
+  assert.deepEqual(targets.map((target) => target.runtimeResourceName), ["dogfood-runtime", "shared-runtime", "shared-runtime"]);
   assert.deepEqual([...new Set(targets.map((target) => target.accountEnvVar))], ["CDK_DEFAULT_ACCOUNT"]);
   assert.deepEqual([...new Set(targets.map((target) => target.region))], ["us-west-2"]);
   assert.equal(targets.find((target) => target.environmentName === "gamma")?.removalProtection, true);
@@ -48,6 +49,14 @@ test("defines dev gamma and prod deployment targets in one account and region", 
   const invalid = validateInitialDeploymentTargets([targets[0], { ...targets[0], stackName: "DuplicateStack" }]);
   assert.equal(invalid.valid, false);
   assert.ok(invalid.errors.some((error) => error.includes("prod deployment target is required")));
+
+  const invalidGammaName = validateInitialDeploymentTargets([
+    targets[0],
+    { ...targets[1], runtimeResourceName: "dogfood-runtime" },
+    targets[2]
+  ]);
+  assert.equal(invalidGammaName.valid, false);
+  assert.ok(invalidGammaName.errors.some((error) => error.includes("gamma runtime resource name must not include dogfood")));
 });
 
 test("defines secure repeatable Python service container asset inputs", () => {

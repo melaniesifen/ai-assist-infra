@@ -97,6 +97,20 @@ test("synthesizes distinct dev gamma and prod deployment targets", () => {
     TableName: "ai-assist-prod-us-west-2-SessionSecrets",
     DeletionProtectionEnabled: true
   });
+  gammaTemplate.hasResourceProperties("AWS::ECS::Service", {
+    ServiceName: "ai-assist-gamma-us-west-2-shared-runtime"
+  });
+  prodTemplate.hasResourceProperties("AWS::ECS::Service", {
+    ServiceName: "ai-assist-prod-us-west-2-shared-runtime"
+  });
+  gammaTemplate.hasResourceProperties("AWS::Logs::LogGroup", {
+    LogGroupName: "/aws/ecs/ai-assist-gamma-us-west-2-shared-runtime"
+  });
+  prodTemplate.hasResourceProperties("AWS::Logs::LogGroup", {
+    LogGroupName: "/aws/ecs/ai-assist-prod-us-west-2-shared-runtime"
+  });
+  assert.equal(JSON.stringify(gammaTemplate.toJSON()).includes("ai-assist-gamma-us-west-2-dogfood-runtime"), false);
+  assert.equal(JSON.stringify(prodTemplate.toJSON()).includes("ai-assist-prod-us-west-2-dogfood-runtime"), false);
 });
 
 test("synthesizes DynamoDB tables from the canonical table specs", () => {

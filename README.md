@@ -69,6 +69,13 @@ example `ai-assist-dev-us-west-2-http-api`, so KMS aliases, DynamoDB table
 names, API names, log groups, IAM role names, outputs, and future global
 resources have stage-safe and region-safe prefixes.
 
+Runtime physical names are also target-owned. Dev keeps the deployed
+`dogfood-runtime` suffix because dev is the dogfood environment and those
+resources already exist. Gamma and prod use the neutral `shared-runtime` suffix
+so their physical ECS, log, and load-balancer names do not include `dogfood`.
+Keep this target-level mapping in `src/config/environments.ts` instead of
+scattering stage-specific string conditionals through the stack.
+
 KMS is intentionally cost-conscious for the trusted-user MVP: each deployment
 target creates one rotated customer-managed key, for example
 `alias/ai-assist-dev-us-west-2-app-key`. The typed KMS purpose inventory is

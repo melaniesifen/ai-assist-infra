@@ -23,6 +23,7 @@ export interface DeploymentTarget {
   readonly accountEnvVar: string;
   readonly fallbackAccount?: string;
   readonly region: string;
+  readonly runtimeResourceName: string;
   readonly stackName: string;
   readonly removalProtection: boolean;
   readonly logRetentionDays: number;
@@ -30,16 +31,19 @@ export interface DeploymentTarget {
 
 export const INITIAL_DEPLOYMENT_TARGETS: readonly DeploymentTarget[] = Object.freeze([
   target(ENVIRONMENTS.DEV, {
+    runtimeResourceName: "dogfood-runtime",
     stackName: "AiAssistDevInfraStack",
     removalProtection: false,
     logRetentionDays: 30
   }),
   target(ENVIRONMENTS.GAMMA, {
+    runtimeResourceName: "shared-runtime",
     stackName: "AiAssistGammaInfraStack",
     removalProtection: true,
     logRetentionDays: 90
   }),
   target(ENVIRONMENTS.PROD, {
+    runtimeResourceName: "shared-runtime",
     stackName: "AiAssistProdInfraStack",
     removalProtection: true,
     logRetentionDays: 365
@@ -114,6 +118,9 @@ export function validateInitialDeploymentTargets(targets: readonly DeploymentTar
     addUnique(seenNames, environmentName, `${environmentName} is duplicated`, errors);
     addUnique(seenStacks, target.stackName, `${target.stackName} stack name is duplicated`, errors);
     addUnique(seenResourcePrefixes, buildTargetResourceName(target, "probe"), `${environmentName} resource prefix is duplicated`, errors);
+    if (environmentName !== ENVIRONMENTS.DEV && target.runtimeResourceName.includes("dogfood")) {
+      errors.push(`${environmentName} runtime resource name must not include dogfood`);
+    }
   }
 
   for (const missing of expected) {

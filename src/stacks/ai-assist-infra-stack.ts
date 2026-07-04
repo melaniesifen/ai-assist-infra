@@ -30,7 +30,6 @@ const SERVICE_CONTAINER_PORT = 8080;
 const SSE_IDLE_TIMEOUT_SECONDS = 900;
 const DEFAULT_SSE_HEARTBEAT_SECONDS = 25;
 const DEFAULT_SSE_REPLAY_WINDOW_SECONDS = 300;
-const DOGFOOD_RUNTIME_NAME = "dogfood-runtime";
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../../..");
 const PYTHON_SERVICE_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/python-service");
 const DOGFOOD_RUNTIME_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/dogfood-runtime");
@@ -68,6 +67,7 @@ export class AiAssistInfraStack extends cdk.Stack {
       environmentName: normalizeEnvironmentName(props.environmentName ?? ENVIRONMENTS.DEV),
       accountEnvVar: "CDK_DEFAULT_ACCOUNT",
       region: "us-west-2",
+      runtimeResourceName: "dogfood-runtime",
       stackName: id,
       removalProtection: isProductionEnvironment(props.environmentName ?? ENVIRONMENTS.DEV),
       logRetentionDays: isProductionEnvironment(props.environmentName ?? ENVIRONMENTS.DEV) ? 365 : 30
@@ -415,8 +415,9 @@ exports.handler = async (event) => {
     deploymentConfig: TargetDeploymentConfig
   ): { readonly service: ecs.FargateService; readonly httpListener: elbv2.ApplicationListener; readonly httpsListener: elbv2.ApplicationListener; readonly publicLoadBalancer: elbv2.ApplicationLoadBalancer; readonly privateLoadBalancer: elbv2.ApplicationLoadBalancer } {
     const serviceId = "DogfoodRuntime";
+    const runtimeResourceName = deploymentTarget.runtimeResourceName;
     const taskDefinition = new ecs.FargateTaskDefinition(this, `${serviceId}TaskDefinition`, {
-      family: buildTargetResourceName(deploymentTarget, `${DOGFOOD_RUNTIME_NAME}-task`),
+      family: buildTargetResourceName(deploymentTarget, `${runtimeResourceName}-task`),
       cpu: 256,
       memoryLimitMiB: 512,
       taskRole,
@@ -426,14 +427,14 @@ exports.handler = async (event) => {
       }
     });
     const logGroup = new logs.LogGroup(this, `${serviceId}LogGroup`, {
-      logGroupName: `/aws/ecs/${buildTargetResourceName(deploymentTarget, DOGFOOD_RUNTIME_NAME)}`,
+      logGroupName: `/aws/ecs/${buildTargetResourceName(deploymentTarget, runtimeResourceName)}`,
       retention: retentionDays(deploymentTarget.logRetentionDays),
       removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
     });
     const container = taskDefinition.addContainer(`${serviceId}Container`, {
       image: this.createDogfoodRuntimeContainerImage(serviceId),
       logging: ecs.LogDrivers.awsLogs({
-        streamPrefix: DOGFOOD_RUNTIME_NAME,
+        streamPrefix: runtimeResourceName,
         logGroup
       }),
       environment: {
@@ -441,7 +442,7 @@ exports.handler = async (event) => {
         GOOGLE_OAUTH_CLIENT_SECRET_REF: buildTargetResourceName(deploymentTarget, "google-oauth-client-secret"),
         PLATFORM_PROVIDER_SECRET_REF_OPENAI: buildTargetResourceName(deploymentTarget, "platform-provider-openai-secret"),
         PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC: buildTargetResourceName(deploymentTarget, "platform-provider-anthropic-secret"),
-        SERVICE_NAME: DOGFOOD_RUNTIME_NAME,
+        SERVICE_NAME: runtimeResourceName,
         SERVICE_PORT: String(SERVICE_CONTAINER_PORT),
         ROUTE_OWNING_SERVICES: formatRouteOwnershipEnvironment()
       },
@@ -489,7 +490,7 @@ exports.handler = async (event) => {
     serviceSecurityGroup.addIngressRule(publicLoadBalancerSecurityGroup, ec2.Port.tcp(SERVICE_CONTAINER_PORT), "Public SSE load balancer to dogfood runtime container.");
 
     const fargateService = new ecs.FargateService(this, `${serviceId}Service`, {
-      serviceName: buildTargetResourceName(deploymentTarget, DOGFOOD_RUNTIME_NAME),
+      serviceName: buildTargetResourceName(deploymentTarget, runtimeResourceName),
       cluster,
       taskDefinition,
       desiredCount: 1,
@@ -505,7 +506,7 @@ exports.handler = async (event) => {
       }
     });
     const privateLoadBalancer = new elbv2.ApplicationLoadBalancer(this, `${serviceId}PrivateLoadBalancer`, {
-      loadBalancerName: loadBalancerName(deploymentTarget, DOGFOOD_RUNTIME_NAME, "api"),
+      loadBalancerName: loadBalancerName(deploymentTarget, runtimeResourceName, "api"),
       vpc,
       internetFacing: false,
       securityGroup: privateLoadBalancerSecurityGroup
@@ -528,7 +529,7 @@ exports.handler = async (event) => {
     });
 
     const publicLoadBalancer = new elbv2.ApplicationLoadBalancer(this, `${serviceId}LoadBalancer`, {
-      loadBalancerName: loadBalancerName(deploymentTarget, DOGFOOD_RUNTIME_NAME, "pub"),
+      loadBalancerName: loadBalancerName(deploymentTarget, runtimeResourceName, "pub"),
       vpc,
       internetFacing: true,
       securityGroup: publicLoadBalancerSecurityGroup,
