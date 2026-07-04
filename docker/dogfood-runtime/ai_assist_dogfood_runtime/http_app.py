@@ -15,6 +15,7 @@ _AUTH_APP: Any | None = None
 _GOOGLE_DOCS_APP: Any | None = None
 _CONTEXT_APP: Any | None = None
 _ACTION_SERVICE: Any | None = None
+_CONTEXT_CONSENT_REPOSITORY: Any | None = None
 _ORCHESTRATION_CONFIGURED = False
 TRUSTED_IDENTITY_HEADERS = {
     "x-ai-assist-tenant-id",
@@ -22,6 +23,8 @@ TRUSTED_IDENTITY_HEADERS = {
     "x-ai-assist-auth-subject",
 }
 DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENV = "AI_ASSIST_DOGFOOD_CONTEXT_CONSENT_GRANT_JSON"
+DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENABLED_ENV = "AI_ASSIST_DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENABLED"
+CONSENT_GRANT_TABLE_NAME_ENV = "CONSENT_GRANT_TABLE_NAME"
 TRUSTED_UPSTREAM_SSE_HEADERS_ENV = "AI_ASSIST_TRUSTED_UPSTREAM_SSE_HEADERS"
 PLATFORM_PROVIDER_DEFAULT_ENV = "PLATFORM_PROVIDER_DEFAULT"
 PLATFORM_PROVIDER_AUDIT_MODE_ENV = "PLATFORM_PROVIDER_AUDIT_MODE"
@@ -483,16 +486,25 @@ def dogfood_google_docs_action_connector() -> Any:
 
 class DogfoodApplyConsent:
     def validate_apply_consent(self, request: dict[str, Any]) -> dict[str, Any]:
-        grant = dogfood_context_consent_grant(request, request.get("consentGrantId"))
+        validation_request = {
+            "tenantId": request.get("tenantId"),
+            "userId": request.get("userId"),
+            "sessionId": request.get("sessionId"),
+            "provider": "google_docs",
+            "contextMode": "ACTIVE_RESOURCE",
+            "resourceRef": {
+                "provider": "google_docs",
+                "resourceId": request.get("resourceId"),
+            },
+        }
+        grant = dogfood_context_consent_grant(validation_request, request.get("consentGrantId"))
         if not grant:
             return {"allowed": False, "reasonCode": "CONSENT_REQUIRED"}
-        resource_ref = grant.get("resourceRef") if isinstance(grant.get("resourceRef"), dict) else {}
-        if grant.get("status") != "active":
-            return {"allowed": False, "reasonCode": "CONSENT_NOT_ACTIVE"}
-        if grant.get("tenantId") != request.get("tenantId") or grant.get("userId") != request.get("userId"):
-            return {"allowed": False, "reasonCode": "CONSENT_IDENTITY_MISMATCH"}
-        if resource_ref.get("resourceId") not in {request.get("resourceId"), "*"}:
-            return {"allowed": False, "reasonCode": "CONSENT_RESOURCE_MISMATCH"}
+        validation_request["consentGrant"] = grant
+        try:
+            importlib.import_module("ai_assist_context_service").validate_active_consent_for_apply_target(validation_request)
+        except Exception:
+            return {"allowed": False, "reasonCode": "CONSENT_DENIED"}
         return {"allowed": True}
 
 
@@ -741,8 +753,26 @@ def boto3_resource(service_name: str) -> Any:
     return boto3.resource(service_name)
 
 
+def dogfood_context_consent_repository() -> Any | None:
+    global _CONTEXT_CONSENT_REPOSITORY
+    if _CONTEXT_CONSENT_REPOSITORY is not None:
+        return _CONTEXT_CONSENT_REPOSITORY
+    table_name = os.environ.get(CONSENT_GRANT_TABLE_NAME_ENV)
+    if not table_name:
+        return None
+    context_module = importlib.import_module("ai_assist_context_service")
+    _CONTEXT_CONSENT_REPOSITORY = context_module.DynamoDbContextConsentGrantRepository(
+        boto3_resource("dynamodb").Table(table_name)
+    )
+    return _CONTEXT_CONSENT_REPOSITORY
+
+
 def dogfood_context_consent_grant(request: dict[str, Any], consent_grant_id: str | None) -> dict[str, Any] | None:
-    del request
+    repository = dogfood_context_consent_repository()
+    if repository is not None:
+        return repository.load_grant_for_request(request, consent_grant_id)
+    if os.environ.get(DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENABLED_ENV) != "true":
+        return None
     raw_grant = os.environ.get(DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENV)
     if not raw_grant:
         return None
@@ -815,7 +845,7 @@ class AuthGoogleTokenProvider:
 
 
 def authenticated_downstream_headers(headers: dict[str, str]) -> dict[str, str]:
-    product_session = dogfood_auth_app().product_session_codec.verify_bearer(header_value(headers, "authorization"))
+    product_session = dogfood_product_session(headers)
     identity = dogfood_auth_app().identity_service.derive_identity(product_session=product_session)
     sanitized = {
         key: value
@@ -832,7 +862,7 @@ def authenticated_downstream_headers(headers: dict[str, str]) -> dict[str, str]:
 
 def dogfood_orchestration_auth(request: dict[str, Any]) -> dict[str, str]:
     headers = request.get("headers") if isinstance(request.get("headers"), dict) else {}
-    product_session = dogfood_auth_app().product_session_codec.verify_bearer(header_value(headers, "authorization"))
+    product_session = dogfood_product_session(headers)
     identity = dogfood_auth_app().identity_service.derive_identity(product_session=product_session)
     return {
         "tenantId": identity["tenantId"],
@@ -981,7 +1011,19 @@ def provider_error_event(*, provider: str, code: str, category: str, message: st
 
 def session_events_auth_headers(headers: dict[str, str]) -> dict[str, str]:
     if header_value(headers, "authorization"):
-        return authenticated_downstream_headers(headers)
+        product_session = dogfood_auth_app().product_session_codec.verify_bearer(header_value(headers, "authorization"))
+        identity = dogfood_auth_app().identity_service.derive_identity(product_session=product_session)
+        sanitized = {
+            key: value
+            for key, value in headers.items()
+            if str(key).lower() not in TRUSTED_IDENTITY_HEADERS
+        }
+        return {
+            **sanitized,
+            "X-Ai-Assist-Tenant-Id": identity["tenantId"],
+            "X-Ai-Assist-User-Id": identity["userId"],
+            "X-Ai-Assist-Auth-Subject": identity["authSubject"],
+        }
     if trusted_upstream_sse_headers_enabled():
         return dict(headers)
     return {
@@ -1001,6 +1043,19 @@ def header_value(headers: dict[str, str], name: str) -> str | None:
         if str(key).lower() == lowered:
             return value
     return None
+
+
+def dogfood_product_session(headers: dict[str, str]) -> dict[str, Any]:
+    auth_app = dogfood_auth_app()
+    normalized = normalize_headers(headers)
+    product_session_from_headers = getattr(auth_app, "_product_session", None)
+    if callable(product_session_from_headers):
+        return product_session_from_headers(normalized)
+    return auth_app.product_session_codec.verify_bearer(header_value(headers, "authorization"))
+
+
+def normalize_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {str(key).lower(): value for key, value in headers.items()}
 
 
 def parse_query(query_string: str) -> dict[str, list[str]]:

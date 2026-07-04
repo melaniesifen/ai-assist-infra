@@ -206,6 +206,26 @@ response = app.handle_http_request(
 assert response["status"] == 401, response
 assert "stream" not in response, response
 assert events.stream_log_records()[0]["errorCode"] == "AUTH_CONTEXT_REQUIRED", events.stream_log_records()
+class Codec:
+    def verify_bearer(self, header):
+        raise RuntimeError("public SSE must not accept edge JWT identity")
+class Identity:
+    def derive_identity(self, product_session):
+        raise AssertionError("identity should not be derived")
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+app._AUTH_APP = AuthApp()
+forged = app.handle_http_request(
+    method="GET",
+    path="/sessions/session_001/events",
+    headers={
+        "authorization": "Bearer forged.jwt.signature",
+        "x-ai-assist-auth-subject": "cognito-subject-a",
+    },
+)
+assert forged["status"] == 500, forged
+assert "stream" not in forged, forged
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: process.cwd(),
@@ -635,11 +655,38 @@ else:
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
-test("dogfood runtime loads context consent grant from server config only", () => {
+test("dogfood runtime loads context consent grants from DynamoDB and gates static emergency JSON", () => {
   const script = `
 import json
 import os
 import ai_assist_dogfood_runtime.http_app as app
+
+class Table:
+    def __init__(self):
+        self.items = {}
+
+    def get_item(self, Key):
+        item = self.items.get((Key["tenantId"], Key["userId#provider#contextMode#grantId"]))
+        return {"Item": item} if item else {}
+
+    def query(self, **kwargs):
+        tenant_id = kwargs["ExpressionAttributeValues"][":tenantId"]
+        sort_prefix = kwargs["ExpressionAttributeValues"][":sortKeyPrefix"]
+        return {
+            "Items": [
+                item
+                for (item_tenant_id, sort_key), item in self.items.items()
+                if item_tenant_id == tenant_id and sort_key.startswith(sort_prefix)
+            ]
+        }
+
+class DynamoDb:
+    def __init__(self, table):
+        self.table = table
+
+    def Table(self, _name):
+        return self.table
+
 grant = {
     "grantId": "grant-1",
     "tenantId": "tenant-1",
@@ -652,16 +699,42 @@ grant = {
     "grantedAt": "2026-05-29T11:00:00.000Z",
     "expiresAt": "2099-01-01T00:00:00.000Z",
 }
-assert app.dogfood_context_consent_grant({}, "grant-1") is None
+request = {
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "provider": "google_docs",
+    "contextMode": "ACTIVE_RESOURCE",
+    "resourceRef": {"provider": "google_docs", "resourceId": "doc-1"},
+}
+assert app.dogfood_context_consent_grant(request, "grant-1") is None
 os.environ[app.DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENV] = json.dumps(grant)
-assert app.dogfood_context_consent_grant({}, "grant-1")["grantId"] == "grant-1"
-assert app.dogfood_context_consent_grant({}, "other-grant") is None
+assert app.dogfood_context_consent_grant(request, "grant-1") is None
+os.environ[app.DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENABLED_ENV] = "true"
+assert app.dogfood_context_consent_grant(request, "grant-1")["grantId"] == "grant-1"
+assert app.dogfood_context_consent_grant(request, "other-grant") is None
+del os.environ[app.DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENABLED_ENV]
+
+table = Table()
+table.items[("tenant-1", "user-1#google_docs#ACTIVE_RESOURCE#grant-1")] = {
+    **grant,
+    "userId#provider#contextMode#grantId": "user-1#google_docs#ACTIVE_RESOURCE#grant-1",
+    "ttl": 4070908800,
+}
+app._CONTEXT_CONSENT_REPOSITORY = None
+app.boto3_resource = lambda service_name: DynamoDb(table)
+os.environ[app.CONSENT_GRANT_TABLE_NAME_ENV] = "ContextConsentGrants"
+assert app.dogfood_context_consent_grant(request, "grant-1")["grantId"] == "grant-1"
+wrong_resource = {**request, "resourceRef": {"provider": "google_docs", "resourceId": "doc-2"}}
+assert app.dogfood_context_consent_grant(wrong_resource, "grant-1") is None
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-context-service/src")
+      ].join(path.delimiter)
     },
     encoding: "utf8"
   });
@@ -1021,6 +1094,7 @@ test("validates trusted-user runtime config without leaking secret values", () =
     "TRUSTED_USER_TENANT_ID",
     "TRUSTED_USER_USER_ID",
     "TRUSTED_USER_AUTH_SUBJECT",
+    "AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON",
     "TRUSTED_USER_BOOTSTRAP_SECRET"
   ];
   for (const key of requiredAuthRuntimeKeys) {
@@ -1039,6 +1113,15 @@ test("validates trusted-user runtime config without leaking secret values", () =
   validConfig.SSE_HEARTBEAT_SECONDS = "25";
   validConfig.SSE_REPLAY_WINDOW_SECONDS = "300";
   validConfig.TRUSTED_USER_MODE = "true";
+  validConfig.AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON = JSON.stringify([
+    {
+      authSubject: "cognito-subject-a",
+      tenantId: "tenant-a",
+      userId: "user-a",
+      role: "owner",
+      status: "active"
+    }
+  ]);
   validConfig.PLATFORM_PROVIDER_QUOTA_MODE = "enforced";
   validConfig.PLATFORM_PROVIDER_AUDIT_MODE = "metadata";
   assert.equal(validateRuntimeConfig(validConfig).valid, true);

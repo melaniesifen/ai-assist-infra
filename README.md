@@ -26,7 +26,7 @@ The current CDK app creates:
 
 - One shared customer-managed KMS app key and alias per deployment target for OAuth tokens, session secrets, proposed actions, and future user secrets.
 - DynamoDB tables for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session event replay metadata.
-- HTTP API command routes with JWT authorizer wiring and VPC link integrations through an internal ALB to one shared dogfood ECS/Fargate runtime.
+- HTTP API command routes with Cognito/OIDC JWT authorizer wiring and VPC link integrations through an internal ALB to one shared dogfood ECS/Fargate runtime.
 - Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same runtime path.
 - Static web app hosting for the target `WebAppBaseUrl` host using a private S3
   assets bucket, CloudFront, a CloudFront ACM certificate, and Route 53 alias
@@ -128,9 +128,12 @@ The typed route inventory covers:
 
 HTTP command routes synthesize with API Gateway JWT authorization, VPC link
 integrations, request/correlation ID header propagation, and one shared ALB
-HTTP listener. Authenticated integrations overwrite trusted tenant and user
-headers from validated JWT claims (`tenant_id` and `user_id`) before forwarding
-to the runtime. Route metadata still records the owning service. The only API Gateway product-route edge auth
+HTTP listener. CDK provisions a Cognito User Pool and public app client per
+target, exposes issuer/audience outputs, and configures API Gateway JWT
+authorizers from those values. Authenticated integrations forward only the
+validated JWT `sub` claim as `x-ai-assist-auth-subject`; backend services map
+that subject to allowed product users before deriving `tenantId` and `userId`.
+Route metadata still records the owning service. The only API Gateway product-route edge auth
 exceptions are `POST /auth/login` and `GET /oauth/google/callback`: login is
 the trusted-user bootstrap boundary, and the Google callback cannot carry the
 browser's bearer token from Google's redirect. The auth service must validate
@@ -220,8 +223,11 @@ client secret value in `cdk.context.json`, `.env`, shell command history, or the
 ECS task definition.
 `GOOGLE_OAUTH_CALLBACK_URL` is derived from the generated HTTP API endpoint as
 `${API_BASE_URL}/oauth/google/callback`.
-`PRODUCT_AUTH_ISSUER` is injected from the target's ignored deployment context
-alongside `PRODUCT_AUTH_AUDIENCE`.
+`PRODUCT_AUTH_ISSUER` and `PRODUCT_AUTH_AUDIENCE` are injected from the
+target's CDK-managed Cognito User Pool issuer and app client id. The stack also
+outputs both values for local client/test configuration.
+`AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON` is injected from ignored deployment
+context and maps Cognito subjects to allowed product tenant/user identities.
 `PLATFORM_PROVIDER_SECRET_REF_OPENAI` and
 `PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC` are injected as names of CDK-managed
 Secrets Manager placeholder secrets. Replace only the provider secret values you
@@ -273,12 +279,12 @@ are account/environment-specific and should stay out of source control.
 
 `edgeJwtAuthEnabled` defaults to `true`. It may be set to `false` only for the
 `dev` target to run an infrastructure health deploy before a real product auth
-issuer exists. `productAuthAudience` is still required because the dogfood auth
-runtime uses it for product-session tokens. That bypass removes the API Gateway
-JWT authorizer and leaves API Gateway routes unauthenticated at the edge. It
-must not be used as evidence that the trusted-user product loop is dogfood-ready;
-Cognito or another real product auth issuer is still required before personal
-end-to-end use.
+issuer is ready to be exercised. CDK still provisions the Cognito User Pool and
+app client and injects their issuer/audience into the runtime, but the bypass
+removes the API Gateway JWT authorizer and leaves API Gateway routes
+unauthenticated at the edge. It must not be used as evidence that the
+trusted-user product loop is dogfood-ready; Cognito-backed product auth is still
+required before personal end-to-end use.
 
 Security notes:
 
@@ -302,6 +308,22 @@ Example local context shape:
       "edgeJwtAuthEnabled": false,
       "productAuthIssuer": "https://auth.dev.example.test/",
       "productAuthAudience": "ai-assist-dev",
+      "allowedProductUsers": [
+        {
+          "authSubject": "replace-with-dev-cognito-subject-a",
+          "tenantId": "dev-tenant-a",
+          "userId": "dev-user-a",
+          "role": "owner",
+          "status": "active"
+        },
+        {
+          "authSubject": "replace-with-dev-cognito-subject-b",
+          "tenantId": "dev-tenant-b",
+          "userId": "dev-user-b",
+          "role": "member",
+          "status": "active"
+        }
+      ],
       "trustedUserTenantId": "dev-tenant",
       "trustedUserUserId": "dev-user",
       "trustedUserAuthSubject": "trusted-user:dev-user",
@@ -387,6 +409,13 @@ stacks, and `GOOGLE_OAUTH_CALLBACK_URL` must resolve to
 Secret-bearing values are references such as ARNs or aliases, not plaintext
 credentials. Service task definitions receive resource-derived table names and
 the shared app KMS key reference from the stack.
+
+The dogfood runtime uses `CONSENT_GRANT_TABLE_NAME` as the normal source for
+Google Docs active-resource context read and safe-apply consent. The old static
+`AI_ASSIST_DOGFOOD_CONTEXT_CONSENT_GRANT_JSON` path is disabled by default and
+is only accepted when `AI_ASSIST_DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENABLED=true`
+is set as an owner emergency override.
+
 For the deployed dogfood runtime, CDK injects
 `GOOGLE_OAUTH_CLIENT_SECRET_REF=ai-assist-<target>-<region>-google-oauth-client-secret`
 and grants the task role permission to read that secret at runtime. It also

@@ -58,6 +58,7 @@ export const REQUIRED_RUNTIME_CONFIG: readonly RuntimeConfigRequirement[] = Obje
   requirement("TRUSTED_USER_TENANT_ID", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Stable trusted-user tenant id."),
   requirement("TRUSTED_USER_USER_ID", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Stable trusted-user user id."),
   requirement("TRUSTED_USER_AUTH_SUBJECT", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Stable trusted-user auth subject."),
+  requirement("AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON", RUNTIME_CONFIG_CATEGORIES.PRODUCT_AUTH, "JSON allowlist mapping verified Cognito subjects to product tenant/user identity."),
   requirement("TRUSTED_USER_BOOTSTRAP_SECRET", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Trusted-user bootstrap login secret.", true)
 ]);
 
@@ -87,6 +88,9 @@ export function validateRuntimeConfig(config: Record<string, string | undefined>
     if (["SESSION_SECRET_TTL_HOURS", "PROPOSED_ACTION_TTL_HOURS", "SSE_HEARTBEAT_SECONDS", "SSE_REPLAY_WINDOW_SECONDS"].includes(entry.name)) {
       validatePositiveInteger(entry.name, value, invalid);
     }
+    if (entry.name === "AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON") {
+      validateAllowedProductUsers(value, invalid);
+    }
     if (entry.name === "PLATFORM_PROVIDER_QUOTA_MODE" && value.trim().toLowerCase() !== "enforced") {
       invalid.push("PLATFORM_PROVIDER_QUOTA_MODE must be enforced for multi-user trusted dev");
     }
@@ -102,6 +106,32 @@ export function validateRuntimeConfig(config: Record<string, string | undefined>
     setupStatus: missing.length === 0 && invalid.length === 0 ? "ready" : "blocked",
     safeMessages: [...missing.map((name) => `${name} is required`), ...invalid]
   };
+}
+
+function validateAllowedProductUsers(value: string, invalid: string[]): void {
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      invalid.push("AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON must be a non-empty JSON array");
+      return;
+    }
+    for (const item of parsed) {
+      if (
+        typeof item !== "object" ||
+        item === null ||
+        typeof item.authSubject !== "string" ||
+        typeof item.tenantId !== "string" ||
+        typeof item.userId !== "string" ||
+        (item.role !== "owner" && item.role !== "member") ||
+        (item.status !== "active" && item.status !== "disabled")
+      ) {
+        invalid.push("AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON entries must include authSubject, tenantId, userId, role, and status");
+        return;
+      }
+    }
+  } catch {
+    invalid.push("AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON must be valid JSON");
+  }
 }
 
 export function listRuntimeConfigRequirements(): RuntimeConfigRequirement[] {

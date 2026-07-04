@@ -64,6 +64,12 @@ Relevant LLDs:
 - [x] M9-T9 route/runtime contract slice: align the typed route inventory and assertions to canonical deployed-dev paths: `/oauth/google/*`, `/sessions/{sessionId}/events`, auth login/logout/session, resource-session commands/actions/apply, and `GET /health` as the only intentionally placeholder-backed route.
 - [x] M9-T9 route/runtime contract slice: document the API Gateway JWT/OIDC issuer, audience, and JWKS discovery requirements plus the trusted-user login and OAuth callback edge-auth exceptions that must be validated by the auth service.
 - [x] Add a dev-only `edgeJwtAuthEnabled=false` infra-health bypass for API Gateway JWT authorizer creation while keeping gamma/prod edge auth strict.
+- [x] M11-T2: Provision target-scoped Cognito User Pools and app clients,
+  expose product-auth issuer/audience outputs, and wire API Gateway JWT
+  authorizers to those Cognito values.
+- [x] M11-T2: Forward only the verified Cognito `sub` claim to the shared
+  runtime for authenticated routes and inject the allowed-product-users mapping
+  as runtime metadata.
 - [x] M9-T9 auth runtime slice: update the shared Python service container to install repo dependencies and delegate non-health requests to service-provided HTTP adapters, preserving safe `501` fallback for services that do not yet provide one.
 - [x] INFRA-001 cost baseline slice: collapse per-service Fargate services into one shared dogfood runtime, use a private API ALB for API Gateway VPC link traffic and a public HTTPS ALB for SSE on the same runtime, omit optional CloudWatch dashboards/alarms in dev, preserve gamma/prod alarm guardrails, and document the temporary dogfood union-role exception.
 - [x] INFRA-001 cost baseline slice: add a dedicated dogfood runtime image that installs all current MVP service packages, dispatches by method/path to owning service adapters when present, returns explicit safe fallbacks for unimplemented adapters, and maps API Gateway JWT tenant/user claims into trusted upstream identity headers for authenticated integrations.
@@ -71,6 +77,15 @@ Relevant LLDs:
 - [x] M10-T4 infra slice: expose `/providers` from configured platform provider metadata after product-session verification, inject platform provider access into orchestration command requests, and configure orchestration with dogfood context/event/policy dependencies while returning a structured provider dependency error instead of calling real model providers. Deployed live proof still requires redeploy plus approved provider configuration and the orchestration-owned command/action slice.
 - [x] M10-T5: replace the shared dogfood runtime SSE readiness stub with dispatch to the session-events runtime for `GET /sessions/{sessionId}/events`, deriving trusted identity from product-session bearer tokens by default, allowing trusted upstream identity headers only through explicit runtime opt-in, and preserving long-lived stream responses in the shared Python wrapper. Deployed live proof still requires redeploy and approved stream smoke.
 - [x] M10-T6 infra slice: expose proposed-action create/list/get, approve/reject, and apply-action dogfood routes through orchestration with durable proposed-action table/KMS payload dependencies and Google Docs apply connector wiring when deployed config is present; otherwise return structured orchestration dependency errors. Deployed live proof still requires redeploy and approved controlled Google Docs write smoke.
+- [x] M11-T3 infra slice: wire dogfood context preview and apply-action consent
+  validation to `ContextConsentGrants` via `CONSENT_GRANT_TABLE_NAME`, leaving
+  the static dogfood grant JSON disabled by default as an owner emergency
+  override only.
+- [x] M11-T4 infra slice: require platform provider quota mode and metadata
+  audit mode in runtime config for multi-user trusted dev.
+- [x] M11-T4 infra slice: inject quota/audit readiness into the shared dogfood
+  runtime's provider status and orchestration provider-access handoff without
+  exposing provider secret references in browser output.
 
 ## Future Production Tasks
 
