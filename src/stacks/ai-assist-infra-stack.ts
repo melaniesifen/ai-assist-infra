@@ -91,7 +91,7 @@ export class AiAssistInfraStack extends cdk.Stack {
     const tables = this.createDynamoDbTables(deploymentTarget, keys);
     const secrets = this.createRuntimeSecrets(deploymentTarget);
     const serviceRoles = this.createServiceRoles(tables, keys);
-    const api = this.createHttpApi(deploymentTarget);
+    const api = this.createHttpApi(deploymentTarget, deploymentConfig);
     const webAppHosting = this.createWebAppHosting(deploymentTarget, deploymentConfig, props.webAppCertificate);
     const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, api.attrApiEndpoint, deploymentConfig, props.productAuth);
     this.createHttpRouteInventory(api, deploymentTarget, runtime, deploymentConfig, props.productAuth);
@@ -314,11 +314,21 @@ export class AiAssistInfraStack extends cdk.Stack {
     };
   }
 
-  private createHttpApi(deploymentTarget: DeploymentTarget): apigatewayv2.CfnApi {
+  private createHttpApi(deploymentTarget: DeploymentTarget, deploymentConfig: TargetDeploymentConfig): apigatewayv2.CfnApi {
+    const allowedOrigins = [
+      deploymentConfig.webAppBaseUrl,
+      ...deploymentConfig.productAuthHostedUiCallbackUrls
+    ];
     return new apigatewayv2.CfnApi(this, "HttpApi", {
       name: buildTargetResourceName(deploymentTarget, "http-api"),
       protocolType: "HTTP",
-      description: "Trusted-user HTTP command routes wired to the shared dogfood runtime for AI Assist."
+      description: "Trusted-user HTTP command routes wired to the shared dogfood runtime for AI Assist.",
+      corsConfiguration: {
+        allowHeaders: ["authorization", "content-type", "x-correlation-id", "x-request-id"],
+        allowMethods: ["DELETE", "GET", "OPTIONS", "POST", "PUT"],
+        allowOrigins: allowedOrigins,
+        maxAge: 600
+      }
     });
   }
 

@@ -134,7 +134,17 @@ test("synthesizes distinct dev gamma and prod deployment targets", () => {
   assert.equal(synthStack(gammaTarget).stackName, "AiAssistGammaInfraStack");
   assert.equal(synthStack(prodTarget).stackName, "AiAssistProdInfraStack");
   devTemplate.hasResourceProperties("AWS::ApiGatewayV2::Api", {
-    Name: "ai-assist-dev-us-west-2-http-api"
+    Name: "ai-assist-dev-us-west-2-http-api",
+    CorsConfiguration: {
+      AllowHeaders: ["authorization", "content-type", "x-correlation-id", "x-request-id"],
+      AllowMethods: ["DELETE", "GET", "OPTIONS", "POST", "PUT"],
+      AllowOrigins: [
+        "https://app.dev.example.test",
+        "https://dev-extension.chromiumapp.org/",
+        "https://dev-extension.extensions.allizom.org/"
+      ],
+      MaxAge: 600
+    }
   });
   gammaTemplate.hasResourceProperties("AWS::ApiGatewayV2::Api", {
     Name: "ai-assist-gamma-us-west-2-http-api"
