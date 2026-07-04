@@ -240,13 +240,13 @@ test("can disable API Gateway edge JWT only for dev infra health deploys", () =>
   });
 });
 
-test("synthesizes one shared Fargate runtime and public ALB for API and SSE", () => {
+test("synthesizes one shared Fargate runtime with private API ALB and public SSE ALB", () => {
   const template = synthTemplate();
 
   template.resourceCountIs("AWS::ECS::Cluster", 1);
   template.resourceCountIs("AWS::ECS::Service", 1);
   template.resourceCountIs("AWS::ECS::TaskDefinition", 1);
-  template.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 1);
+  template.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::Listener", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::ListenerRule", 1);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::TargetGroup", 2);
@@ -258,6 +258,9 @@ test("synthesizes one shared Fargate runtime and public ALB for API and SSE", ()
         Value: "900"
       }
     ])
+  });
+  template.hasResourceProperties("AWS::ElasticLoadBalancingV2::LoadBalancer", {
+    Scheme: "internal"
   });
   template.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
     Port: 80,
@@ -288,6 +291,14 @@ test("synthesizes one shared Fargate runtime and public ALB for API and SSE", ()
       })
     ])
   });
+  const renderedResources = template.toJSON().Resources as Record<string, { readonly Type: string; readonly Properties: Record<string, unknown> }>;
+  const publicHttpIngressRules = Object.values(renderedResources).filter((resource) =>
+    resource.Type === "AWS::EC2::SecurityGroupIngress" &&
+    resource.Properties.CidrIp === "0.0.0.0/0" &&
+    resource.Properties.FromPort === 80 &&
+    resource.Properties.ToPort === 80
+  );
+  assert.deepEqual(publicHttpIngressRules, [], "dogfood runtime API listener must not be publicly reachable on HTTP");
   template.hasResourceProperties("AWS::CertificateManager::Certificate", {
     DomainName: "sse.dev.example.test",
     DomainValidationOptions: Match.arrayWith([

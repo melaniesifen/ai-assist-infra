@@ -338,7 +338,7 @@ exports.handler = async (event) => {
     sharedEnvironment: Record<string, string>,
     vpcLinkSecurityGroup: ec2.SecurityGroup,
     deploymentConfig: TargetDeploymentConfig
-  ): { readonly service: ecs.FargateService; readonly httpListener: elbv2.ApplicationListener; readonly httpsListener: elbv2.ApplicationListener; readonly loadBalancer: elbv2.ApplicationLoadBalancer } {
+  ): { readonly service: ecs.FargateService; readonly httpListener: elbv2.ApplicationListener; readonly httpsListener: elbv2.ApplicationListener; readonly publicLoadBalancer: elbv2.ApplicationLoadBalancer; readonly privateLoadBalancer: elbv2.ApplicationLoadBalancer } {
     const serviceId = "DogfoodRuntime";
     const taskDefinition = new ecs.FargateTaskDefinition(this, `${serviceId}TaskDefinition`, {
       family: buildTargetResourceName(deploymentTarget, `${DOGFOOD_RUNTIME_NAME}-task`),
@@ -381,17 +381,23 @@ exports.handler = async (event) => {
 
     const serviceSecurityGroup = new ec2.SecurityGroup(this, `${serviceId}ServiceSecurityGroup`, {
       vpc,
-      description: "Ingress to shared dogfood runtime tasks from the shared load balancer only.",
+      description: "Ingress to shared dogfood runtime tasks from dogfood load balancers only.",
       allowAllOutbound: true
     });
-    const loadBalancerSecurityGroup = new ec2.SecurityGroup(this, `${serviceId}LoadBalancerSecurityGroup`, {
+    const privateLoadBalancerSecurityGroup = new ec2.SecurityGroup(this, `${serviceId}PrivateLoadBalancerSecurityGroup`, {
       vpc,
-      description: "Shared public ALB for API Gateway VPC link traffic and browser EventSource SSE streams.",
+      description: "Internal ALB for API Gateway VPC link traffic to the shared dogfood runtime.",
       allowAllOutbound: true
     });
-    loadBalancerSecurityGroup.addIngressRule(vpcLinkSecurityGroup, ec2.Port.tcp(80), "HTTP API VPC link to shared runtime listener.");
-    loadBalancerSecurityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), "Browser EventSource HTTPS.");
-    serviceSecurityGroup.addIngressRule(loadBalancerSecurityGroup, ec2.Port.tcp(SERVICE_CONTAINER_PORT), "Shared load balancer to dogfood runtime container.");
+    const publicLoadBalancerSecurityGroup = new ec2.SecurityGroup(this, `${serviceId}PublicLoadBalancerSecurityGroup`, {
+      vpc,
+      description: "Public ALB for browser EventSource SSE streams.",
+      allowAllOutbound: true
+    });
+    privateLoadBalancerSecurityGroup.addIngressRule(vpcLinkSecurityGroup, ec2.Port.tcp(80), "HTTP API VPC link to shared runtime listener.");
+    publicLoadBalancerSecurityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), "Browser EventSource HTTPS.");
+    serviceSecurityGroup.addIngressRule(privateLoadBalancerSecurityGroup, ec2.Port.tcp(SERVICE_CONTAINER_PORT), "Private API load balancer to dogfood runtime container.");
+    serviceSecurityGroup.addIngressRule(publicLoadBalancerSecurityGroup, ec2.Port.tcp(SERVICE_CONTAINER_PORT), "Public SSE load balancer to dogfood runtime container.");
 
     const fargateService = new ecs.FargateService(this, `${serviceId}Service`, {
       serviceName: buildTargetResourceName(deploymentTarget, DOGFOOD_RUNTIME_NAME),
@@ -409,16 +415,16 @@ exports.handler = async (event) => {
         subnetType: ec2.SubnetType.PUBLIC
       }
     });
-    const loadBalancer = new elbv2.ApplicationLoadBalancer(this, `${serviceId}LoadBalancer`, {
-      loadBalancerName: loadBalancerName(deploymentTarget, DOGFOOD_RUNTIME_NAME, "pub"),
+    const privateLoadBalancer = new elbv2.ApplicationLoadBalancer(this, `${serviceId}PrivateLoadBalancer`, {
+      loadBalancerName: loadBalancerName(deploymentTarget, DOGFOOD_RUNTIME_NAME, "api"),
       vpc,
-      internetFacing: true,
-      securityGroup: loadBalancerSecurityGroup,
-      idleTimeout: cdk.Duration.seconds(SSE_IDLE_TIMEOUT_SECONDS)
+      internetFacing: false,
+      securityGroup: privateLoadBalancerSecurityGroup
     });
-    const httpListener = loadBalancer.addListener(`${serviceId}HttpListener`, {
+    const httpListener = privateLoadBalancer.addListener(`${serviceId}HttpListener`, {
       port: 80,
-      protocol: elbv2.ApplicationProtocol.HTTP
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      open: false
     });
     httpListener.addTargets(`${serviceId}HttpTargets`, {
       port: SERVICE_CONTAINER_PORT,
@@ -431,6 +437,14 @@ exports.handler = async (event) => {
       },
       deregistrationDelay: cdk.Duration.seconds(30)
     });
+
+    const publicLoadBalancer = new elbv2.ApplicationLoadBalancer(this, `${serviceId}LoadBalancer`, {
+      loadBalancerName: loadBalancerName(deploymentTarget, DOGFOOD_RUNTIME_NAME, "pub"),
+      vpc,
+      internetFacing: true,
+      securityGroup: publicLoadBalancerSecurityGroup,
+      idleTimeout: cdk.Duration.seconds(SSE_IDLE_TIMEOUT_SECONDS)
+    });
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, "PublicHostedZone", {
       hostedZoneId: deploymentConfig.hostedZoneId,
       zoneName: deploymentConfig.hostedZoneName
@@ -439,10 +453,11 @@ exports.handler = async (event) => {
       domainName: deploymentConfig.sseDomainName,
       validation: acm.CertificateValidation.fromDns(hostedZone)
     });
-    const listener = loadBalancer.addListener(`${serviceId}HttpsListener`, {
+    const listener = publicLoadBalancer.addListener(`${serviceId}HttpsListener`, {
       port: 443,
       protocol: elbv2.ApplicationProtocol.HTTPS,
       certificates: [elbv2.ListenerCertificate.fromCertificateManager(certificate)],
+      open: false,
       defaultAction: elbv2.ListenerAction.fixedResponse(404, {
         contentType: "application/json",
         messageBody: JSON.stringify({
@@ -471,9 +486,9 @@ exports.handler = async (event) => {
     new route53.ARecord(this, "SessionEventsSseDnsRecord", {
       zone: hostedZone,
       recordName: deploymentConfig.sseDomainName,
-      target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(loadBalancer))
+      target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(publicLoadBalancer))
     });
-    return { service: fargateService, httpListener, httpsListener: listener, loadBalancer };
+    return { service: fargateService, httpListener, httpsListener: listener, publicLoadBalancer, privateLoadBalancer };
   }
 
   private createDogfoodRuntimeContainerImage(constructId: string): ecs.ContainerImage {

@@ -8,6 +8,8 @@ coverage/
 .coverage/
 .nyc_output/
 .c8/
+__pycache__/
+*.py[cod]
 test-results/
 junit.xml
 tap-report/

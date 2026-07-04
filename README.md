@@ -10,7 +10,7 @@ DynamoDB, KMS, IAM boundary, and rate-limit contracts.
 ## Current Contents
 
 - `bin/ai-assist-infra.ts`: CDK app entry point.
-- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP route integrations, a shared CDK-built dogfood Fargate runtime, shared public ALB hosting for API Gateway VPC link traffic and SSE, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
+- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP route integrations, a shared CDK-built dogfood Fargate runtime, a private API ALB for API Gateway VPC link traffic, a public HTTPS ALB for SSE, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
 - `docker/python-service/`: shared Python service image build context. The image
   installs and compiles the selected service package, serves a metadata-only
   `/health` endpoint, and delegates product routes to a service-provided
@@ -26,8 +26,8 @@ The current CDK app creates:
 
 - One shared customer-managed KMS app key and alias per deployment target for OAuth tokens, session secrets, proposed actions, and future user secrets.
 - DynamoDB tables for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session event replay metadata.
-- HTTP API command routes with JWT authorizer wiring and VPC link integrations to one shared dogfood ECS/Fargate runtime.
-- Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same load balancer and runtime path.
+- HTTP API command routes with JWT authorizer wiring and VPC link integrations through an internal ALB to one shared dogfood ECS/Fargate runtime.
+- Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same runtime path.
 - Service IAM roles with table and KMS grants derived from the IAM boundary matrix.
 - A shared dogfood runtime task role with the union of current MVP service data-plane grants; per-service IAM roles remain synthesized for ownership boundaries and future runtime split-out.
 - Default API Gateway throttling based on the route rate-limit tiers.
@@ -108,7 +108,9 @@ match the bearer tokens used by trusted users. This repo only wires the edge
 authorizer. Owning service repos still own command behavior, service-side
 authZ, session validation, SSE event payloads, and action state transitions.
 
-The public SSE path uses the shared public ALB HTTPS listener, a 900 second idle
+The API Gateway command path uses a private ALB listener reachable only from the
+HTTP API VPC link security group. The public SSE path uses the public ALB HTTPS
+listener, a 900 second idle
 timeout, shared dogfood runtime service logs, health checks, and generic SSE config:
 `SSE_HEARTBEAT_SECONDS=25` and `SSE_REPLAY_WINDOW_SECONDS=300`.
 
