@@ -184,6 +184,8 @@ where the target's web app is hosted, for example
 `https://dev.example.test` for dev dogfood.
 `API_BASE_URL` is not a local context value; CDK derives it from the generated
 HTTP API endpoint and injects it into the dogfood runtime.
+`SSE_BASE_URL` is also derived by CDK from `SseDomainName` and injected into the
+dogfood runtime.
 
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses
