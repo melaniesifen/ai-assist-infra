@@ -42,7 +42,7 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const trustedUserTenantId = requireString(value.trustedUserTenantId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserTenantId`);
   const trustedUserUserId = requireString(value.trustedUserUserId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserUserId`);
   const trustedUserAuthSubject = requireString(value.trustedUserAuthSubject, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserAuthSubject`);
-  const webAppBaseUrl = normalizeHttpsUrl(requireString(value.webAppBaseUrl, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl`), `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl`);
+  const webAppBaseUrl = normalizeHttpsOrigin(requireString(value.webAppBaseUrl, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl`), `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl`);
   const googleOAuthClientId = requireString(value.googleOAuthClientId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.googleOAuthClientId`);
 
   if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
@@ -53,6 +53,13 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   }
   if (!isValidDnsName(sseDomainName) || !isSubdomainOf(sseDomainName, hostedZoneName)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.sseDomainName must be a subdomain of hostedZoneName`);
+  }
+  const webAppDomainName = getWebAppDomainName(webAppBaseUrl);
+  if (!isValidDnsName(webAppDomainName) || !isSubdomainOf(webAppDomainName, hostedZoneName)) {
+    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl host must be a subdomain of hostedZoneName`);
+  }
+  if (webAppDomainName === sseDomainName) {
+    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl host must be different from sseDomainName`);
   }
   if (!edgeJwtAuthEnabled && environmentName !== "dev") {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled may be false only for dev`);
@@ -116,19 +123,29 @@ function normalizeDomainName(value: string): string {
   return value.trim().replace(/\.$/, "").toLowerCase();
 }
 
-function normalizeHttpsUrl(value: string, fieldName: string): string {
+function normalizeHttpsOrigin(value: string, fieldName: string): string {
   let parsed: URL;
   try {
     parsed = new URL(value.trim());
   } catch {
-    throw new Error(`${fieldName} must be an https URL`);
+    throw new Error(`${fieldName} must be an https origin URL`);
   }
-  if (parsed.protocol !== "https:") {
-    throw new Error(`${fieldName} must be an https URL`);
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.port
+  ) {
+    throw new Error(`${fieldName} must be an https origin URL without path, query, fragment, credentials, or port`);
   }
-  parsed.hash = "";
-  parsed.search = "";
-  return parsed.toString().replace(/\/$/, "");
+  return parsed.origin;
+}
+
+export function getWebAppDomainName(webAppBaseUrl: string): string {
+  return new URL(webAppBaseUrl).hostname.toLowerCase();
 }
 
 function isValidDnsName(value: string): boolean {

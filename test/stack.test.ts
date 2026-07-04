@@ -19,7 +19,7 @@ const TEST_DEPLOYMENT_CONFIG = {
   trustedUserTenantId: "test-tenant",
   trustedUserUserId: "test-user",
   trustedUserAuthSubject: "trusted-user:test-user",
-  webAppBaseUrl: "https://app.test.example",
+  webAppBaseUrl: "https://app.dev.example.test",
   googleOAuthClientId: "test-google-client-id.apps.googleusercontent.com"
 };
 
@@ -356,11 +356,11 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
         Environment: Match.arrayWith([
           {
             Name: "WEB_APP_BASE_URL",
-            Value: "https://app.test.example"
+            Value: "https://app.dev.example.test"
           },
           {
             Name: "ALLOWED_ORIGINS",
-            Value: "https://app.test.example"
+            Value: "https://app.dev.example.test"
           },
           {
             Name: "API_BASE_URL",
@@ -501,6 +501,92 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
     ])
   });
   assert.ok(JSON.stringify(template.toJSON()).includes("ai-assist:preserves-service-boundary-roles"));
+});
+
+test("synthesizes static web app hosting and DNS from WebAppBaseUrl", () => {
+  const template = synthTemplate();
+
+  template.resourceCountIs("AWS::CloudFront::Distribution", 1);
+  template.resourceCountIs("AWS::CloudFront::OriginAccessControl", 1);
+  template.hasResourceProperties("AWS::S3::Bucket", {
+    BucketName: "ai-assist-dev-us-west-2-web-app-assets",
+    PublicAccessBlockConfiguration: {
+      BlockPublicAcls: true,
+      BlockPublicPolicy: true,
+      IgnorePublicAcls: true,
+      RestrictPublicBuckets: true
+    },
+    BucketEncryption: {
+      ServerSideEncryptionConfiguration: [
+        {
+          ServerSideEncryptionByDefault: {
+            SSEAlgorithm: "AES256"
+          }
+        }
+      ]
+    },
+    VersioningConfiguration: {
+      Status: "Enabled"
+    }
+  });
+  template.hasResourceProperties("AWS::S3::BucketPolicy", {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: "s3:GetObject",
+          Principal: {
+            Service: "cloudfront.amazonaws.com"
+          }
+        })
+      ])
+    })
+  });
+  template.hasResourceProperties("AWS::CloudFront::Distribution", {
+    DistributionConfig: Match.objectLike({
+      Aliases: ["app.dev.example.test"],
+      DefaultRootObject: "index.html",
+      DefaultCacheBehavior: Match.objectLike({
+        AllowedMethods: ["GET", "HEAD", "OPTIONS"],
+        Compress: true,
+        ViewerProtocolPolicy: "redirect-to-https"
+      }),
+      CustomErrorResponses: Match.arrayWith([
+        Match.objectLike({
+          ErrorCode: 403,
+          ResponseCode: 200,
+          ResponsePagePath: "/index.html"
+        }),
+        Match.objectLike({
+          ErrorCode: 404,
+          ResponseCode: 200,
+          ResponsePagePath: "/index.html"
+        })
+      ])
+    })
+  });
+  template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
+    DomainName: "app.dev.example.test",
+    Region: "us-east-1",
+    HostedZoneId: "Z1234567890ABC"
+  });
+  template.hasResourceProperties("AWS::Route53::RecordSet", {
+    Name: "app.dev.example.test.",
+    Type: "A",
+    HostedZoneId: "Z1234567890ABC"
+  });
+  template.hasOutput("WebAppBaseUrl", {
+    Value: "https://app.dev.example.test"
+  });
+  template.hasOutput("WebAppAssetsBucketName", {
+    Value: {
+      Ref: Match.stringLikeRegexp("WebAppAssetsBucket")
+    }
+  });
+  template.hasOutput("WebAppDistributionId", {
+    Value: {
+      Ref: Match.stringLikeRegexp("WebAppDistribution")
+    }
+  });
 });
 
 test("does not require service image or auth/certificate parameters after switching to assets and local context", () => {

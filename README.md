@@ -28,6 +28,10 @@ The current CDK app creates:
 - DynamoDB tables for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session event replay metadata.
 - HTTP API command routes with JWT authorizer wiring and VPC link integrations through an internal ALB to one shared dogfood ECS/Fargate runtime.
 - Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same runtime path.
+- Static web app hosting for the target `WebAppBaseUrl` host using a private S3
+  assets bucket, CloudFront, a CloudFront ACM certificate, and Route 53 alias
+  DNS. The bucket is intentionally empty until `ai-assist-web/dist` assets are
+  built and uploaded as a deployment handoff.
 - Service IAM roles with table and KMS grants derived from the IAM boundary matrix.
 - Generated Secrets Manager secrets for dogfood product-session HMAC signing,
   Google OAuth state signing, trusted-user bootstrap login, and the Google
@@ -207,6 +211,10 @@ bootstrap mode it can be a stable local subject such as `trusted-user:dev-user`.
 `WebAppBaseUrl` is injected as `WEB_APP_BASE_URL` and should be the HTTPS origin
 where the target's web app is hosted, for example
 `https://dev.example.test` for dev dogfood.
+CDK also creates the static hosting infrastructure and Route 53 alias for the
+host in `WebAppBaseUrl`. The host must be a subdomain of `HostedZoneName` and
+must be different from `SseDomainName`; otherwise synth fails instead of
+claiming an unresolvable app URL.
 `ALLOWED_ORIGINS` is derived from `WebAppBaseUrl` for dogfood and injected into
 the runtime to keep CORS/redirect origin checks aligned with the web app URL.
 `API_BASE_URL` is not a local context value; CDK derives it from the generated
@@ -220,10 +228,10 @@ placeholders.
 
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses
-the hosted zone values to request an ACM certificate, create DNS validation, and
-create the Route 53 alias record for the public SSE load balancer. These values
-are not service secrets, but they are account/environment-specific and should
-stay out of source control.
+the hosted zone values to request ACM certificates, create DNS validation, and
+create Route 53 alias records for the public SSE load balancer and the static
+web app CloudFront distribution. These values are not service secrets, but they
+are account/environment-specific and should stay out of source control.
 
 `edgeJwtAuthEnabled` defaults to `true`. It may be set to `false` only for the
 `dev` target to run an infrastructure health deploy before a real product auth
@@ -273,6 +281,26 @@ URI, auth, or certificate parameters:
 npm run build
 npx cdk deploy AiAssistDevInfraStack
 ```
+
+## Static Web App Hosting
+
+For each deployment target, the stack creates:
+
+- an encrypted private S3 bucket named
+  `ai-assist-<target>-<region>-web-app-assets`
+- a CloudFront distribution with origin access control, HTTPS redirect, security
+  response headers, SPA fallback to `/index.html`, and the host from
+  `WebAppBaseUrl`
+- an ACM certificate in `us-east-1` for the CloudFront alias
+- a Route 53 `A` alias record for the `WebAppBaseUrl` host
+- outputs for `WebAppBaseUrl`, `WebAppAssetsBucketName`, and
+  `WebAppDistributionId`
+
+This slice does not build or upload frontend artifacts. After `ai-assist-web`
+produces a production `dist/` directory, upload those files to the
+`WebAppAssetsBucketName` output and invalidate the CloudFront distribution from
+`WebAppDistributionId`. Until that handoff is performed, DNS resolves and
+CloudFront is deployed, but the web app will not serve real UI assets.
 
 ## Local Real-Flow Config
 

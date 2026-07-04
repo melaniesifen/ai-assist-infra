@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { PYTHON_SERVICE_BASE_IMAGE, PYTHON_SERVICE_CONTAINER_ASSETS, validateContainerAssetConfig } from "../src/config/container-assets";
-import { DEPLOYMENT_CONFIG_CONTEXT_KEY, parseDeploymentConfigContext } from "../src/config/deployment-config";
+import { DEPLOYMENT_CONFIG_CONTEXT_KEY, getWebAppDomainName, parseDeploymentConfigContext } from "../src/config/deployment-config";
 import { getDynamoDbTableSpec, listDynamoDbTableSpecs } from "../src/config/dynamodb-tables";
 import {
   buildEnvironmentResourceName,
@@ -146,6 +146,7 @@ test("parses local deployment config from CDK context without exposing secrets",
   assert.equal(config.trustedUserUserId, "dev-user");
   assert.equal(config.trustedUserAuthSubject, "trusted-user:dev-user");
   assert.equal(config.webAppBaseUrl, "https://dev.example.test");
+  assert.equal(getWebAppDomainName(config.webAppBaseUrl), "dev.example.test");
   assert.equal(config.googleOAuthClientId, "dev-google-client-id.apps.googleusercontent.com");
   assert.equal(config.edgeJwtAuthEnabled, true);
   assert.equal(
@@ -213,6 +214,81 @@ test("parses local deployment config from CDK context without exposing secrets",
       ),
     /sseDomainName must be a subdomain of hostedZoneName/
   );
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          dev: {
+            hostedZoneId: "Z1234567890ABC",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.dev.example.test",
+            edgeJwtAuthEnabled: true,
+            productAuthIssuer: "https://auth.dev.example.test/",
+            productAuthAudience: "ai-assist-dev",
+            trustedUserTenantId: "dev-tenant",
+            trustedUserUserId: "dev-user",
+            trustedUserAuthSubject: "trusted-user:dev-user",
+            webAppBaseUrl: "https://dev.other.test",
+            googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com"
+          }
+        },
+        "dev"
+      ),
+    /webAppBaseUrl host must be a subdomain of hostedZoneName/
+  );
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          dev: {
+            hostedZoneId: "Z1234567890ABC",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.dev.example.test",
+            edgeJwtAuthEnabled: true,
+            productAuthIssuer: "https://auth.dev.example.test/",
+            productAuthAudience: "ai-assist-dev",
+            trustedUserTenantId: "dev-tenant",
+            trustedUserUserId: "dev-user",
+            trustedUserAuthSubject: "trusted-user:dev-user",
+            webAppBaseUrl: "https://sse.dev.example.test",
+            googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com"
+          }
+        },
+        "dev"
+      ),
+    /webAppBaseUrl host must be different from sseDomainName/
+  );
+  for (const invalidWebAppBaseUrl of [
+    "https://dev.example.test/app",
+    "https://dev.example.test?preview=true",
+    "https://dev.example.test#app",
+    "https://user:pass@dev.example.test",
+    "https://dev.example.test:8443"
+  ]) {
+    assert.throws(
+      () =>
+        parseDeploymentConfigContext(
+          {
+            dev: {
+              hostedZoneId: "Z1234567890ABC",
+              hostedZoneName: "example.test",
+              sseDomainName: "sse.dev.example.test",
+              edgeJwtAuthEnabled: true,
+              productAuthIssuer: "https://auth.dev.example.test/",
+              productAuthAudience: "ai-assist-dev",
+              trustedUserTenantId: "dev-tenant",
+              trustedUserUserId: "dev-user",
+              trustedUserAuthSubject: "trusted-user:dev-user",
+              webAppBaseUrl: invalidWebAppBaseUrl,
+              googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com"
+            }
+          },
+          "dev"
+        ),
+      /webAppBaseUrl must be an https origin URL without path, query, fragment, credentials, or port/,
+      `${invalidWebAppBaseUrl} must be rejected`
+    );
+  }
   assert.throws(
     () =>
       parseDeploymentConfigContext(

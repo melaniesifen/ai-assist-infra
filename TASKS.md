@@ -59,6 +59,7 @@ Relevant LLDs:
 - [x] Add container deployment guardrails for non-`latest` base image selection, CDK asset image publication, and Fargate `LATEST` platform version.
 - [x] Move SSE domain, hosted zone, product auth issuer, and product auth audience from CloudFormation parameters to ignored local CDK context so standard deploys do not require manual parameters.
 - [x] Let CDK create public SSE ACM certificates, DNS validation, and Route 53 alias records from the configured hosted zone for repeatable dev/gamma/prod deploys.
+- [x] Let CDK create static web app hosting and DNS from `WebAppBaseUrl` for repeatable dev/gamma/prod deploys. Current behavior creates a private S3 assets bucket, CloudFront distribution, `us-east-1` ACM certificate, Route 53 alias, and deployment outputs; building/uploading `ai-assist-web/dist` remains an explicit deployment handoff.
 - [x] M9-T9 route/runtime contract slice: align the typed route inventory and assertions to canonical deployed-dev paths: `/oauth/google/*`, `/sessions/{sessionId}/events`, auth login/logout/session, resource-session commands/actions/apply, and `GET /health` as the only intentionally placeholder-backed route.
 - [x] M9-T9 route/runtime contract slice: document the API Gateway JWT/OIDC issuer, audience, and JWKS discovery requirements plus the trusted-user login and OAuth callback edge-auth exceptions that must be validated by the auth service.
 - [x] Add a dev-only `edgeJwtAuthEnabled=false` infra-health bypass for API Gateway JWT authorizer creation while keeping gamma/prod edge auth strict.

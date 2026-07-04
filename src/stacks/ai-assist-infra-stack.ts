@@ -1,6 +1,8 @@
 import * as cdk from "aws-cdk-lib";
 import * as apigatewayv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as cloudfrontOrigins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
@@ -13,11 +15,12 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
+import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 import * as path from "node:path";
 import { PYTHON_SERVICE_BASE_IMAGE, PYTHON_SERVICE_CONTAINER_ASSETS } from "../config/container-assets";
-import { DEPLOYMENT_CONFIG_CONTEXT_KEY, TargetDeploymentConfig, parseDeploymentConfigContext } from "../config/deployment-config";
+import { DEPLOYMENT_CONFIG_CONTEXT_KEY, TargetDeploymentConfig, getWebAppDomainName, parseDeploymentConfigContext } from "../config/deployment-config";
 import { DynamoDbTableSpec, listDynamoDbTableSpecs } from "../config/dynamodb-tables";
 import { DeploymentTarget, ENVIRONMENTS, buildTargetResourceName, isProductionEnvironment, normalizeEnvironmentName } from "../config/environments";
 import { DYNAMODB_ACCESS_LEVELS, IAM_BOUNDARY_MATRIX, KMS_ACCESS_LEVELS } from "../config/iam-boundaries";
@@ -30,6 +33,7 @@ const SERVICE_CONTAINER_PORT = 8080;
 const SSE_IDLE_TIMEOUT_SECONDS = 900;
 const DEFAULT_SSE_HEARTBEAT_SECONDS = 25;
 const DEFAULT_SSE_REPLAY_WINDOW_SECONDS = 300;
+const CLOUDFRONT_CERTIFICATE_REGION = "us-east-1";
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../../..");
 const PYTHON_SERVICE_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/python-service");
 const DOGFOOD_RUNTIME_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/dogfood-runtime");
@@ -79,6 +83,7 @@ export class AiAssistInfraStack extends cdk.Stack {
     const secrets = this.createRuntimeSecrets(deploymentTarget);
     const serviceRoles = this.createServiceRoles(tables, keys);
     const api = this.createHttpApi(deploymentTarget);
+    const webAppHosting = this.createWebAppHosting(deploymentTarget, deploymentConfig);
     const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, api.attrApiEndpoint, deploymentConfig);
     this.createHttpRouteInventory(api, deploymentTarget, runtime, deploymentConfig);
     this.createOperationalAlarms(deploymentTarget);
@@ -99,6 +104,82 @@ export class AiAssistInfraStack extends cdk.Stack {
     new cdk.CfnOutput(this, "SseBaseUrl", {
       value: `https://${deploymentConfig.sseDomainName}`
     });
+    new cdk.CfnOutput(this, "WebAppBaseUrl", {
+      value: deploymentConfig.webAppBaseUrl
+    });
+    new cdk.CfnOutput(this, "WebAppAssetsBucketName", {
+      value: webAppHosting.assetsBucket.bucketName
+    });
+    new cdk.CfnOutput(this, "WebAppDistributionId", {
+      value: webAppHosting.distribution.distributionId
+    });
+  }
+
+  private createWebAppHosting(
+    deploymentTarget: DeploymentTarget,
+    deploymentConfig: TargetDeploymentConfig
+  ): { readonly assetsBucket: s3.Bucket; readonly distribution: cloudfront.Distribution } {
+    const webAppDomainName = getWebAppDomainName(deploymentConfig.webAppBaseUrl);
+    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, "WebAppHostedZone", {
+      hostedZoneId: deploymentConfig.hostedZoneId,
+      zoneName: deploymentConfig.hostedZoneName
+    });
+    const assetsBucket = new s3.Bucket(this, "WebAppAssetsBucket", {
+      bucketName: buildTargetResourceName(deploymentTarget, "web-app-assets"),
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: true,
+      removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+    });
+    const certificate = new acm.DnsValidatedCertificate(this, "WebAppCertificate", {
+      domainName: webAppDomainName,
+      hostedZone,
+      region: CLOUDFRONT_CERTIFICATE_REGION
+    });
+    const distribution = new cloudfront.Distribution(this, "WebAppDistribution", {
+      comment: `AI Assist ${deploymentTarget.environmentName} static web app hosting.`,
+      defaultRootObject: "index.html",
+      domainNames: [webAppDomainName],
+      certificate,
+      minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      defaultBehavior: {
+        origin: cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(assetsBucket),
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+        compress: true,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS
+      },
+      errorResponses: [
+        {
+          httpStatus: 403,
+          responseHttpStatus: 200,
+          responsePagePath: "/index.html",
+          ttl: cdk.Duration.minutes(5)
+        },
+        {
+          httpStatus: 404,
+          responseHttpStatus: 200,
+          responsePagePath: "/index.html",
+          ttl: cdk.Duration.minutes(5)
+        }
+      ]
+    });
+
+    new route53.ARecord(this, "WebAppDnsRecord", {
+      zone: hostedZone,
+      recordName: webAppDomainName,
+      target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution))
+    });
+
+    cdk.Tags.of(assetsBucket).add("ai-assist:environment", deploymentTarget.environmentName);
+    cdk.Tags.of(assetsBucket).add("ai-assist:region", deploymentTarget.region);
+    cdk.Tags.of(distribution).add("ai-assist:environment", deploymentTarget.environmentName);
+    cdk.Tags.of(distribution).add("ai-assist:region", deploymentTarget.region);
+
+    return { assetsBucket, distribution };
   }
 
   private createKmsKeys(deploymentTarget: DeploymentTarget): Record<KmsPurpose, kms.Key> {
