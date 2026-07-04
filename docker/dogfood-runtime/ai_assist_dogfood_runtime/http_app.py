@@ -24,6 +24,8 @@ TRUSTED_IDENTITY_HEADERS = {
 DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENV = "AI_ASSIST_DOGFOOD_CONTEXT_CONSENT_GRANT_JSON"
 TRUSTED_UPSTREAM_SSE_HEADERS_ENV = "AI_ASSIST_TRUSTED_UPSTREAM_SSE_HEADERS"
 PLATFORM_PROVIDER_DEFAULT_ENV = "PLATFORM_PROVIDER_DEFAULT"
+PLATFORM_PROVIDER_AUDIT_MODE_ENV = "PLATFORM_PROVIDER_AUDIT_MODE"
+PLATFORM_PROVIDER_QUOTA_MODE_ENV = "PLATFORM_PROVIDER_QUOTA_MODE"
 PLATFORM_PROVIDER_SECRET_REF_PREFIX = "PLATFORM_PROVIDER_SECRET_REF_"
 SUPPORTED_PLATFORM_PROVIDERS = ("openai", "anthropic")
 COMMAND_ROUTE_RE = re.compile(r"^/resource-sessions/[^/]+/commands$")
@@ -868,6 +870,8 @@ def platform_provider_access_payload(provider: str, existing: Any) -> dict[str, 
     return {
         "source": "platform",
         "reference": provider_secret_ref(provider),
+        "quotaDecision": platform_provider_quota_decision(provider),
+        "auditDecision": platform_provider_audit_decision(provider),
     }
 
 
@@ -880,15 +884,62 @@ def platform_provider_status_payload() -> dict[str, Any]:
 
 def provider_status(provider: str) -> dict[str, Any]:
     configured = provider_secret_ref(provider) is not None
+    quota_decision = platform_provider_quota_decision(provider)
+    audit_decision = platform_provider_audit_decision(provider)
+    ready = configured and quota_decision["decision"] == "allow" and audit_decision["decision"] == "recorded"
     return {
         "provider": provider,
-        "status": "available" if configured else "not_configured",
+        "status": "available" if ready else "not_configured",
         "accessSource": "platform",
         "configured": configured,
-        "available": configured,
+        "available": ready,
         "default": provider == default_platform_provider(),
-        **({} if configured else {"reasonCode": "PLATFORM_PROVIDER_SECRET_REF_MISSING"}),
+        "quotaReady": quota_decision["decision"] == "allow",
+        "auditReady": audit_decision["decision"] == "recorded",
+        **(
+            {}
+            if ready
+            else {
+                "reasonCode": provider_not_ready_reason(
+                    configured=configured,
+                    quota_decision=quota_decision,
+                    audit_decision=audit_decision,
+                )
+            }
+        ),
     }
+
+
+def platform_provider_quota_decision(provider: str) -> dict[str, Any]:
+    del provider
+    if os.environ.get(PLATFORM_PROVIDER_QUOTA_MODE_ENV, "").strip().lower() == "enforced":
+        return {"decision": "allow", "status": "ready"}
+    return {
+        "decision": "not_configured",
+        "status": "quota_not_ready",
+        "reasonCode": "PLATFORM_PROVIDER_QUOTA_NOT_CONFIGURED",
+    }
+
+
+def platform_provider_audit_decision(provider: str) -> dict[str, Any]:
+    del provider
+    if os.environ.get(PLATFORM_PROVIDER_AUDIT_MODE_ENV, "").strip().lower() == "metadata":
+        return {"decision": "recorded", "status": "ready"}
+    return {
+        "decision": "not_configured",
+        "status": "audit_not_ready",
+        "reasonCode": "PLATFORM_PROVIDER_AUDIT_NOT_CONFIGURED",
+    }
+
+
+def provider_not_ready_reason(*, configured: bool, quota_decision: dict[str, Any], audit_decision: dict[str, Any]) -> str:
+    if not configured:
+        return "PLATFORM_PROVIDER_SECRET_REF_MISSING"
+    if quota_decision.get("decision") != "allow":
+        return str(quota_decision.get("reasonCode") or "PLATFORM_PROVIDER_QUOTA_NOT_CONFIGURED")
+    if audit_decision.get("decision") != "recorded":
+        return str(audit_decision.get("reasonCode") or "PLATFORM_PROVIDER_AUDIT_NOT_CONFIGURED")
+    return "PLATFORM_PROVIDER_NOT_READY"
 
 
 def provider_secret_ref(provider: str) -> str | None:

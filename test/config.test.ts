@@ -503,6 +503,8 @@ class AuthApp:
 app._AUTH_APP = AuthApp()
 os.environ["PLATFORM_PROVIDER_DEFAULT"] = "openai"
 os.environ["PLATFORM_PROVIDER_SECRET_REF_OPENAI"] = "openai-secret-ref"
+os.environ["PLATFORM_PROVIDER_QUOTA_MODE"] = "enforced"
+os.environ["PLATFORM_PROVIDER_AUDIT_MODE"] = "metadata"
 os.environ.pop("PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC", None)
 response = app.handle_http_request(
     method="GET",
@@ -524,6 +526,8 @@ assert payload["data"]["defaultProvider"] == "openai", payload
 providers = {item["provider"]: item for item in payload["data"]["providers"]}
 assert providers["openai"]["available"] is True, payload
 assert providers["openai"]["default"] is True, payload
+assert providers["openai"]["quotaReady"] is True, payload
+assert providers["openai"]["auditReady"] is True, payload
 assert providers["anthropic"]["status"] == "not_configured", payload
 assert "openai-secret-ref" not in json.dumps(payload), payload
 `;
@@ -549,6 +553,8 @@ import os
 import ai_assist_dogfood_runtime.http_app as app
 os.environ["PLATFORM_PROVIDER_DEFAULT"] = "openai"
 os.environ["PLATFORM_PROVIDER_SECRET_REF_OPENAI"] = "openai-secret-ref"
+os.environ["PLATFORM_PROVIDER_QUOTA_MODE"] = "enforced"
+os.environ["PLATFORM_PROVIDER_AUDIT_MODE"] = "metadata"
 body = app.dogfood_orchestration_body(
     "POST",
     "/resource-sessions/session-1/commands",
@@ -560,7 +566,12 @@ body = app.dogfood_orchestration_body(
 )
 payload = json.loads(body.decode("utf-8"))
 assert payload["provider"] == "openai", payload
-assert payload["providerAccess"] == {"source": "platform", "reference": "openai-secret-ref"}, payload
+assert payload["providerAccess"] == {
+    "source": "platform",
+    "reference": "openai-secret-ref",
+    "quotaDecision": {"decision": "allow", "status": "ready"},
+    "auditDecision": {"decision": "recorded", "status": "ready"},
+}, payload
 assert payload["tenantId"] == "caller-tenant", payload
 assert payload["userId"] == "caller-user", payload
 byo = app.dogfood_orchestration_body(
@@ -1028,6 +1039,8 @@ test("validates trusted-user runtime config without leaking secret values", () =
   validConfig.SSE_HEARTBEAT_SECONDS = "25";
   validConfig.SSE_REPLAY_WINDOW_SECONDS = "300";
   validConfig.TRUSTED_USER_MODE = "true";
+  validConfig.PLATFORM_PROVIDER_QUOTA_MODE = "enforced";
+  validConfig.PLATFORM_PROVIDER_AUDIT_MODE = "metadata";
   assert.equal(validateRuntimeConfig(validConfig).valid, true);
 
   const missingAuthRuntimeKey = validateRuntimeConfig({
@@ -1045,7 +1058,9 @@ test("validates trusted-user runtime config without leaking secret values", () =
     GOOGLE_OAUTH_CALLBACK_URL: "https://api.example.test/auth/google/callback",
     ALLOWED_ORIGINS: "https://example.test,http://bad.example.test",
     SSE_HEARTBEAT_SECONDS: "soon",
-    TRUSTED_USER_MODE: "false"
+    TRUSTED_USER_MODE: "false",
+    PLATFORM_PROVIDER_QUOTA_MODE: "optional",
+    PLATFORM_PROVIDER_AUDIT_MODE: "verbose"
   });
 
   assert.equal(invalid.valid, false);
@@ -1054,6 +1069,8 @@ test("validates trusted-user runtime config without leaking secret values", () =
   assert.ok(invalid.safeMessages.some((message) => message.includes("GOOGLE_OAUTH_CALLBACK_URL must use /oauth/google/callback")));
   assert.ok(invalid.safeMessages.some((message) => message.includes("ALLOWED_ORIGINS origin http://bad.example.test must use https")));
   assert.ok(invalid.safeMessages.some((message) => message.includes("TRUSTED_USER_MODE must be true")));
+  assert.ok(invalid.safeMessages.some((message) => message.includes("PLATFORM_PROVIDER_QUOTA_MODE must be enforced")));
+  assert.ok(invalid.safeMessages.some((message) => message.includes("PLATFORM_PROVIDER_AUDIT_MODE must be metadata")));
   assert.ok(invalid.safeMessages.some((message) => message.includes("SSE_HEARTBEAT_SECONDS must be a positive integer")));
   assert.equal(JSON.stringify(invalid).includes("super-secret-value"), false);
 });

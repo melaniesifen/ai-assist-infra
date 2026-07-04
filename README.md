@@ -227,13 +227,18 @@ alongside `PRODUCT_AUTH_AUDIENCE`.
 Secrets Manager placeholder secrets. Replace only the provider secret values you
 plan to use after deploy; the default dogfood provider is
 `PLATFORM_PROVIDER_DEFAULT=openai`.
+`PLATFORM_PROVIDER_QUOTA_MODE=enforced` and
+`PLATFORM_PROVIDER_AUDIT_MODE=metadata` are also injected for M11 multi-user
+trusted dev. If either readiness mode is missing or changed, provider status and
+orchestration command creation fail closed before a platform provider credential
+can be used.
 The shared dogfood runtime exposes `/providers` from this platform provider
 metadata after verifying the product-session bearer token and does not return
 secret reference names or credential values. Orchestration command requests are
-also adapted in-process to use the configured platform provider access reference
-and product-session-derived tenant/user identity; until an explicit provider
-client hook is supplied, the runtime returns a structured provider dependency
-error instead of calling a real model provider.
+also adapted in-process to use the configured platform provider access reference,
+quota/audit readiness, and product-session-derived tenant/user identity; until
+an explicit provider client hook is supplied, the runtime returns a structured
+provider dependency error instead of calling a real model provider.
 `TrustedUserTenantId` is injected as `TRUSTED_USER_TENANT_ID`; it is not a
 secret, but it should be stable for a target so issued sessions and stored
 tenant-scoped records agree on the same tenant identifier.
@@ -366,6 +371,8 @@ SESSION_EVENT_TABLE_NAME
 PLATFORM_PROVIDER_SECRET_REF_OPENAI
 PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC
 PLATFORM_PROVIDER_DEFAULT
+PLATFORM_PROVIDER_QUOTA_MODE
+PLATFORM_PROVIDER_AUDIT_MODE
 SESSION_SECRET_TTL_HOURS
 PROPOSED_ACTION_TTL_HOURS
 SSE_HEARTBEAT_SECONDS

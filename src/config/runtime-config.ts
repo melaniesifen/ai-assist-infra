@@ -40,6 +40,8 @@ export const REQUIRED_RUNTIME_CONFIG: readonly RuntimeConfigRequirement[] = Obje
   requirement("PLATFORM_PROVIDER_SECRET_REF_OPENAI", RUNTIME_CONFIG_CATEGORIES.PLATFORM_PROVIDER, "Secret reference for the platform-owned OpenAI credential.", true),
   requirement("PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC", RUNTIME_CONFIG_CATEGORIES.PLATFORM_PROVIDER, "Secret reference for the platform-owned Anthropic credential.", true),
   requirement("PLATFORM_PROVIDER_DEFAULT", RUNTIME_CONFIG_CATEGORIES.PLATFORM_PROVIDER, "Default platform provider."),
+  requirement("PLATFORM_PROVIDER_QUOTA_MODE", RUNTIME_CONFIG_CATEGORIES.PLATFORM_PROVIDER, "Platform provider quota mode; must be enforced for multi-user dev."),
+  requirement("PLATFORM_PROVIDER_AUDIT_MODE", RUNTIME_CONFIG_CATEGORIES.PLATFORM_PROVIDER, "Platform provider metadata-only audit mode."),
   requirement("TENANT_TABLE_NAME", RUNTIME_CONFIG_CATEGORIES.SERVICE_URL, "Tenant table name."),
   requirement("OAUTH_TOKEN_TABLE_NAME", RUNTIME_CONFIG_CATEGORIES.SERVICE_URL, "OAuth token table name."),
   requirement("SESSION_SECRET_TABLE_NAME", RUNTIME_CONFIG_CATEGORIES.SERVICE_URL, "Session secret table name."),
@@ -84,6 +86,12 @@ export function validateRuntimeConfig(config: Record<string, string | undefined>
     }
     if (["SESSION_SECRET_TTL_HOURS", "PROPOSED_ACTION_TTL_HOURS", "SSE_HEARTBEAT_SECONDS", "SSE_REPLAY_WINDOW_SECONDS"].includes(entry.name)) {
       validatePositiveInteger(entry.name, value, invalid);
+    }
+    if (entry.name === "PLATFORM_PROVIDER_QUOTA_MODE" && value.trim().toLowerCase() !== "enforced") {
+      invalid.push("PLATFORM_PROVIDER_QUOTA_MODE must be enforced for multi-user trusted dev");
+    }
+    if (entry.name === "PLATFORM_PROVIDER_AUDIT_MODE" && value.trim().toLowerCase() !== "metadata") {
+      invalid.push("PLATFORM_PROVIDER_AUDIT_MODE must be metadata for multi-user trusted dev");
     }
   }
 
