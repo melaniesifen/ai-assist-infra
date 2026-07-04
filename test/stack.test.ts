@@ -22,7 +22,7 @@ const TEST_DEV_EDGE_AUTH_DISABLED_CONFIG = {
   ...TEST_DEPLOYMENT_CONFIG,
   edgeJwtAuthEnabled: false,
   productAuthIssuer: "",
-  productAuthAudience: ""
+  productAuthAudience: "ai-assist-dev"
 };
 
 function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): Template {
@@ -334,6 +334,10 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
       Match.objectLike({
         Image: Match.anyValue(),
         Environment: Match.arrayWith([
+          {
+            Name: "PRODUCT_AUTH_AUDIENCE",
+            Value: "ai-assist-test"
+          },
           {
             Name: "SSE_HEARTBEAT_SECONDS",
             Value: "25"

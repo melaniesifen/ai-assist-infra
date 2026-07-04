@@ -320,7 +320,7 @@ exports.handler = async (event) => {
       subnetIds: vpc.publicSubnets.map((subnet) => subnet.subnetId),
       securityGroupIds: [vpcLinkSecurityGroup.securityGroupId]
     });
-    const sharedEnvironment = this.buildSharedServiceEnvironment(deploymentTarget, tables, keys);
+    const sharedEnvironment = this.buildSharedServiceEnvironment(deploymentTarget, tables, keys, deploymentConfig);
     const dogfoodRuntimeRole = this.createDogfoodRuntimeRole(tables, keys);
     const runtime = this.createDogfoodRuntimeService(deploymentTarget, vpc, cluster, dogfoodRuntimeRole, sharedEnvironment, vpcLinkSecurityGroup, deploymentConfig);
 
@@ -507,13 +507,15 @@ exports.handler = async (event) => {
   private buildSharedServiceEnvironment(
     deploymentTarget: DeploymentTarget,
     tables: Record<string, dynamodb.Table>,
-    keys: Record<KmsPurpose, kms.Key>
+    keys: Record<KmsPurpose, kms.Key>,
+    deploymentConfig: TargetDeploymentConfig
   ): Record<string, string> {
     const tableName = (name: string): string => tables[name]?.tableName ?? "";
     return {
       APP_ENV: deploymentTarget.environmentName,
       AWS_REGION: deploymentTarget.region,
       TRUSTED_USER_MODE: "true",
+      PRODUCT_AUTH_AUDIENCE: deploymentConfig.productAuthAudience,
       APP_KMS_KEY_ID: keys[KMS_PURPOSES.OAUTH_TOKENS].keyArn,
       TENANT_TABLE_NAME: tableName("Tenants"),
       OAUTH_TOKEN_TABLE_NAME: tableName("OAuthTokens"),

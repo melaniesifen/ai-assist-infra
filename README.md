@@ -154,6 +154,10 @@ ProductAuthIssuer
 ProductAuthAudience
 ```
 
+`ProductAuthAudience` is also injected into the shared dogfood runtime as
+`PRODUCT_AUTH_AUDIENCE` so the auth adapter can issue and verify product-session
+tokens for the target environment.
+
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses
 the hosted zone values to request an ACM certificate, create DNS validation, and
@@ -163,10 +167,12 @@ stay out of source control.
 
 `edgeJwtAuthEnabled` defaults to `true`. It may be set to `false` only for the
 `dev` target to run an infrastructure health deploy before a real product auth
-issuer exists. That bypass removes the API Gateway JWT authorizer and leaves
-API Gateway routes unauthenticated at the edge. It must not be used as evidence
-that the trusted-user product loop is dogfood-ready; Cognito or another real
-product auth issuer is still required before personal end-to-end use.
+issuer exists. `productAuthAudience` is still required because the dogfood auth
+runtime uses it for product-session tokens. That bypass removes the API Gateway
+JWT authorizer and leaves API Gateway routes unauthenticated at the edge. It
+must not be used as evidence that the trusted-user product loop is dogfood-ready;
+Cognito or another real product auth issuer is still required before personal
+end-to-end use.
 
 Security notes:
 

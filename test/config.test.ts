@@ -136,7 +136,8 @@ test("parses local deployment config from CDK context without exposing secrets",
           hostedZoneId: "Z1234567890ABC",
           hostedZoneName: "example.test",
           sseDomainName: "sse.dev.example.test",
-          edgeJwtAuthEnabled: false
+          edgeJwtAuthEnabled: false,
+          productAuthAudience: "ai-assist-dev"
         }
       },
       "dev"
@@ -186,7 +187,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneId: "Z1234567890ABC",
             hostedZoneName: "example.test",
             sseDomainName: "sse.gamma.example.test",
-            edgeJwtAuthEnabled: false
+            edgeJwtAuthEnabled: false,
+            productAuthAudience: "ai-assist-gamma"
           }
         },
         "gamma"

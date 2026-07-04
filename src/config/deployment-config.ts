@@ -33,7 +33,7 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const sseDomainName = normalizeDomainName(requireString(value.sseDomainName, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.sseDomainName`));
   const edgeJwtAuthEnabled = value.edgeJwtAuthEnabled !== undefined ? requireBoolean(value.edgeJwtAuthEnabled, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled`) : true;
   const productAuthIssuer = edgeJwtAuthEnabled ? requireString(value.productAuthIssuer, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthIssuer`) : optionalString(value.productAuthIssuer);
-  const productAuthAudience = edgeJwtAuthEnabled ? requireString(value.productAuthAudience, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthAudience`) : optionalString(value.productAuthAudience);
+  const productAuthAudience = requireString(value.productAuthAudience, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthAudience`);
 
   if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneId must be a Route 53 hosted zone id`);
