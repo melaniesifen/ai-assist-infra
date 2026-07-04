@@ -558,7 +558,7 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
           },
           {
             Name: "ALLOWED_ORIGINS",
-            Value: "https://app.dev.example.test"
+            Value: "https://app.dev.example.test,https://dev-extension.chromiumapp.org/,https://dev-extension.extensions.allizom.org/"
           },
           {
             Name: "API_BASE_URL",

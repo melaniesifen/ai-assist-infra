@@ -703,11 +703,15 @@ exports.handler = async (event) => {
     productAuth: ProductAuthResources
   ): Record<string, string> {
     const tableName = (name: string): string => tables[name]?.tableName ?? "";
+    const allowedOrigins = [
+      deploymentConfig.webAppBaseUrl,
+      ...deploymentConfig.productAuthHostedUiCallbackUrls
+    ].join(",");
     return {
       APP_ENV: deploymentTarget.environmentName,
       AWS_REGION: deploymentTarget.region,
       WEB_APP_BASE_URL: deploymentConfig.webAppBaseUrl,
-      ALLOWED_ORIGINS: deploymentConfig.webAppBaseUrl,
+      ALLOWED_ORIGINS: allowedOrigins,
       API_BASE_URL: apiBaseUrl,
       SSE_BASE_URL: `https://${deploymentConfig.sseDomainName}`,
       GOOGLE_OAUTH_CALLBACK_URL: cdk.Fn.join("", [apiBaseUrl, "/oauth/google/callback"]),

@@ -225,6 +225,11 @@ client secret value in `cdk.context.json`, `.env`, shell command history, or the
 ECS task definition.
 `GOOGLE_OAUTH_CALLBACK_URL` is derived from the generated HTTP API endpoint as
 `${API_BASE_URL}/oauth/google/callback`.
+`ALLOWED_ORIGINS` includes `WebAppBaseUrl` plus the target's CDK-owned
+`ProductAuthHostedUiCallbackUrls`. The auth service uses the same allowlist for
+Google OAuth `redirectTarget` validation, so the sidebar can start Google OAuth
+with its extension identity redirect URL and return through the browser
+extension flow without putting bearer or OAuth tokens in query strings.
 `PRODUCT_AUTH_ISSUER` and `PRODUCT_AUTH_AUDIENCE` are injected from the
 target's CDK-managed product-auth stack. The auth stack outputs issuer,
 audience, and user pool id for local client/test configuration.

@@ -96,6 +96,9 @@ Relevant LLDs:
   UI domains, public app-client OAuth settings, extension callback/logout URLs,
   token validity, and non-secret auth-stack outputs for ignored extension
   runtime config.
+- [x] M11-T5.3 sidebar Google OAuth infra slice: include the target's
+  CDK-owned extension callback URLs in auth-service `ALLOWED_ORIGINS` so
+  `/oauth/google/start` can validate an extension identity `redirectTarget`.
 
 ## Future Production Tasks
 
