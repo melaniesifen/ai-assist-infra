@@ -157,6 +157,7 @@ ProductAuthAudience
 TrustedUserTenantId
 TrustedUserUserId
 TrustedUserAuthSubject
+WebAppBaseUrl
 ```
 
 `ProductAuthAudience` is also injected into the shared dogfood runtime as
@@ -178,6 +179,9 @@ tenant-scoped records agree on the same tenant identifier.
 stable for the target's dogfood user.
 `TrustedUserAuthSubject` is injected as `TRUSTED_USER_AUTH_SUBJECT`; in trusted
 bootstrap mode it can be a stable local subject such as `trusted-user:dev-user`.
+`WebAppBaseUrl` is injected as `WEB_APP_BASE_URL` and should be the HTTPS origin
+where the target's web app is hosted, for example
+`https://dev.example.test` for dev dogfood.
 
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses
@@ -219,7 +223,8 @@ Example local context shape:
       "productAuthAudience": "ai-assist-dev",
       "trustedUserTenantId": "dev-tenant",
       "trustedUserUserId": "dev-user",
-      "trustedUserAuthSubject": "trusted-user:dev-user"
+      "trustedUserAuthSubject": "trusted-user:dev-user",
+      "webAppBaseUrl": "https://dev.example.test"
     }
   }
 }

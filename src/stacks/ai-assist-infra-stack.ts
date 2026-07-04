@@ -560,6 +560,7 @@ exports.handler = async (event) => {
     return {
       APP_ENV: deploymentTarget.environmentName,
       AWS_REGION: deploymentTarget.region,
+      WEB_APP_BASE_URL: deploymentConfig.webAppBaseUrl,
       TRUSTED_USER_MODE: "true",
       TRUSTED_USER_TENANT_ID: deploymentConfig.trustedUserTenantId,
       TRUSTED_USER_USER_ID: deploymentConfig.trustedUserUserId,
