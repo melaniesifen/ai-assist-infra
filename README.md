@@ -28,6 +28,7 @@ The current CDK app creates:
 - One shared customer-managed KMS app key and alias per deployment target for OAuth tokens, session secrets, proposed actions, and future user secrets.
 - DynamoDB tables for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session event replay metadata.
 - A target-scoped product-auth stack with Cognito User Pool, public app client, owner/member groups, issuer/audience/user-pool outputs, and HTTP API command routes in the runtime stack that import those values for Cognito/OIDC JWT authorizer wiring.
+- A target-scoped Cognito Hosted UI domain and public OAuth app-client configuration for the browser extension login path, including callback/logout URL outputs for ignored extension runtime config.
 - Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same runtime path.
 - Static web app hosting for the target `WebAppBaseUrl` host using a private S3
   assets bucket, CloudFront, a CloudFront ACM certificate, and Route 53 alias
@@ -273,6 +274,12 @@ dogfood runtime.
 configuration rather than a credential secret, but the real environment value
 belongs in ignored `cdk.context.json`; committed examples should use
 placeholders.
+`ProductAuthHostedUiCallbackUrls` and `ProductAuthHostedUiLogoutUrls` are
+registered on the public Cognito app client for sidebar product login. Dev may
+use the local Chrome identity redirect URL and the Firefox temporary add-on
+redirect URL while dogfooding. Gamma and prod must use explicit release
+redirect URLs and synth rejects localhost, placeholder, or Firefox temporary
+add-on values for those targets.
 
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses
@@ -309,6 +316,14 @@ Example local context shape:
       "hostedZoneId": "Z1234567890ABC",
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.dev.example.test",
+      "productAuthHostedUiCallbackUrls": [
+        "https://replace-with-chrome-extension-id.chromiumapp.org/",
+        "https://replace-with-firefox-temporary-addon-id.extensions.allizom.org/"
+      ],
+      "productAuthHostedUiLogoutUrls": [
+        "https://replace-with-chrome-extension-id.chromiumapp.org/",
+        "https://replace-with-firefox-temporary-addon-id.extensions.allizom.org/"
+      ],
       "edgeJwtAuthEnabled": false,
       "allowedProductUsers": [
         {
@@ -358,6 +373,38 @@ npx cdk deploy AiAssistDevWebCertificateStack AiAssistDevInfraStack
 The `aws cognito-idp list-users` command is metadata-only: it returns usernames,
 subjects, status, and enabled state. Do not print, log, or commit passwords,
 tokens, OAuth secrets, provider keys, or raw user credentials.
+
+For live sidebar sign-in proof, deploy the target auth stack after
+`productAuthHostedUiCallbackUrls` and `productAuthHostedUiLogoutUrls` contain
+the actual extension identity redirect URLs:
+
+```sh
+npm run build
+npx cdk deploy AiAssistDevAuthStack
+```
+
+Then copy these non-secret `AiAssistDevAuthStack` outputs into ignored
+`ai-assist-web/extension/config.dev.json` and
+`ai-assist-web/extension/firefox/config.dev.json`:
+
+- `ProductAuthHostedUiOrigin` -> `cognitoAuthBaseUrl`
+- `ProductAuthAppClientId` or `ProductAuthAudience` -> `cognitoClientId`
+- one registered `ProductAuthCallbackUrls` value -> `cognitoRedirectUri`
+- the matching `ProductAuthLogoutUrls` value -> `cognitoLogoutRedirectUri`
+- `ProductAuthOAuthScopes` -> `cognitoScopes`
+- `ProductAuthUserPoolId` and `ProductAuthIssuer` for local verification or
+  diagnostics
+
+Rebuild and reload the extension after updating ignored config:
+
+```sh
+cd ../ai-assist-web
+npm run build:extension:firefox:dev
+```
+
+Load the rebuilt temporary add-on, open a Google Doc, open the AI Assist
+sidebar, and sign in through Cognito Hosted UI. Google OAuth remains a separate
+post-product-login step.
 
 ## Static Web App Hosting
 

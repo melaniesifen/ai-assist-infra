@@ -4,6 +4,14 @@
       "hostedZoneId": "Z1234567890ABC",
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.dev.example.test",
+      "productAuthHostedUiCallbackUrls": [
+        "https://replace-with-chrome-extension-id.chromiumapp.org/",
+        "https://replace-with-firefox-temporary-addon-id.extensions.allizom.org/"
+      ],
+      "productAuthHostedUiLogoutUrls": [
+        "https://replace-with-chrome-extension-id.chromiumapp.org/",
+        "https://replace-with-firefox-temporary-addon-id.extensions.allizom.org/"
+      ],
       "edgeJwtAuthEnabled": false,
       "allowedProductUsers": [
         {
@@ -31,6 +39,12 @@
       "hostedZoneId": "Z1234567890ABC",
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.gamma.example.test",
+      "productAuthHostedUiCallbackUrls": [
+        "https://replace-with-gamma-extension-id.chromiumapp.org/"
+      ],
+      "productAuthHostedUiLogoutUrls": [
+        "https://replace-with-gamma-extension-id.chromiumapp.org/"
+      ],
       "edgeJwtAuthEnabled": true,
       "allowedProductUsers": [
         {
@@ -51,6 +65,12 @@
       "hostedZoneId": "Z1234567890ABC",
       "hostedZoneName": "example.test",
       "sseDomainName": "sse.example.test",
+      "productAuthHostedUiCallbackUrls": [
+        "https://replace-with-prod-extension-id.chromiumapp.org/"
+      ],
+      "productAuthHostedUiLogoutUrls": [
+        "https://replace-with-prod-extension-id.chromiumapp.org/"
+      ],
       "edgeJwtAuthEnabled": true,
       "allowedProductUsers": [
         {

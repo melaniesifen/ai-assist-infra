@@ -1,20 +1,26 @@
 import * as cdk from "aws-cdk-lib";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import { Construct } from "constructs";
+import { TargetDeploymentConfig } from "../config/deployment-config";
 import { DeploymentTarget, ENVIRONMENTS, buildTargetResourceName, isProductionEnvironment, normalizeEnvironmentName } from "../config/environments";
 
 export interface AiAssistProductAuthStackProps extends cdk.StackProps {
   readonly environmentName?: string;
   readonly deploymentTarget?: DeploymentTarget;
+  readonly deploymentConfig?: Pick<TargetDeploymentConfig, "productAuthHostedUiCallbackUrls" | "productAuthHostedUiLogoutUrls" | "productAuthHostedUiDomainPrefix">;
 }
 
 export interface ProductAuthResources {
   readonly issuer: string;
   readonly audience: string;
   readonly userPoolId: string;
+  readonly hostedUiOrigin: string;
+  readonly callbackUrls: readonly string[];
+  readonly logoutUrls: readonly string[];
 }
 
 const PRODUCT_AUTH_GROUPS = ["owner", "member"] as const;
+const PRODUCT_AUTH_SCOPES = [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE] as const;
 
 export class AiAssistProductAuthStack extends cdk.Stack {
   public readonly productAuth: ProductAuthResources;
@@ -34,6 +40,9 @@ export class AiAssistProductAuthStack extends cdk.Stack {
       logRetentionDays: isProductionEnvironment(props.environmentName ?? ENVIRONMENTS.DEV) ? 365 : 30
     };
     const environmentName = normalizeEnvironmentName(deploymentTarget.environmentName);
+    const callbackUrls = props.deploymentConfig?.productAuthHostedUiCallbackUrls ?? [`https://replace-with-${environmentName}-extension-id.chromiumapp.org/`];
+    const logoutUrls = props.deploymentConfig?.productAuthHostedUiLogoutUrls ?? callbackUrls;
+    const hostedUiDomainPrefix = props.deploymentConfig?.productAuthHostedUiDomainPrefix ?? buildTargetResourceName(deploymentTarget, "product-auth");
 
     const userPool = new cognito.UserPool(this, "ProductAuthUserPool", {
       userPoolName: buildTargetResourceName(deploymentTarget, "product-auth-users"),
@@ -49,9 +58,24 @@ export class AiAssistProductAuthStack extends cdk.Stack {
       authFlows: {
         userSrp: true
       },
+      oAuth: {
+        flows: {
+          implicitCodeGrant: true
+        },
+        scopes: [...PRODUCT_AUTH_SCOPES],
+        callbackUrls: [...callbackUrls],
+        logoutUrls: [...logoutUrls]
+      },
       preventUserExistenceErrors: true,
       accessTokenValidity: cdk.Duration.hours(1),
-      idTokenValidity: cdk.Duration.hours(1)
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(1),
+      authSessionValidity: cdk.Duration.minutes(15)
+    });
+    const hostedUiDomain = userPool.addDomain("ProductAuthHostedUiDomain", {
+      cognitoDomain: {
+        domainPrefix: hostedUiDomainPrefix
+      }
     });
 
     for (const groupName of PRODUCT_AUTH_GROUPS) {
@@ -67,7 +91,10 @@ export class AiAssistProductAuthStack extends cdk.Stack {
     this.productAuth = {
       issuer: cdk.Fn.join("", ["https://cognito-idp.", cdk.Stack.of(this).region, ".amazonaws.com/", userPool.userPoolId]),
       audience: appClient.userPoolClientId,
-      userPoolId: userPool.userPoolId
+      userPoolId: userPool.userPoolId,
+      hostedUiOrigin: cdk.Fn.join("", ["https://", hostedUiDomain.domainName]),
+      callbackUrls,
+      logoutUrls
     };
 
     cdk.Tags.of(this).add("ai-assist:environment", environmentName);
@@ -81,6 +108,21 @@ export class AiAssistProductAuthStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, "ProductAuthUserPoolId", {
       value: this.productAuth.userPoolId
+    });
+    new cdk.CfnOutput(this, "ProductAuthHostedUiOrigin", {
+      value: this.productAuth.hostedUiOrigin
+    });
+    new cdk.CfnOutput(this, "ProductAuthAppClientId", {
+      value: this.productAuth.audience
+    });
+    new cdk.CfnOutput(this, "ProductAuthOAuthScopes", {
+      value: PRODUCT_AUTH_SCOPES.map((scope) => scope.scopeName).join(",")
+    });
+    new cdk.CfnOutput(this, "ProductAuthCallbackUrls", {
+      value: cdk.Fn.join(",", [...callbackUrls])
+    });
+    new cdk.CfnOutput(this, "ProductAuthLogoutUrls", {
+      value: cdk.Fn.join(",", [...logoutUrls])
     });
   }
 }

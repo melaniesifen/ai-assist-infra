@@ -92,6 +92,10 @@ Relevant LLDs:
   stack outputs, remove issuer/audience placeholders from tracked context, and
   document a metadata-only Cognito `sub` discovery path for ignored local
   allowed-user mappings.
+- [x] M11-T5.2 hosted-ui infra slice: configure target-scoped Cognito Hosted
+  UI domains, public app-client OAuth settings, extension callback/logout URLs,
+  token validity, and non-secret auth-stack outputs for ignored extension
+  runtime config.
 
 ## Future Production Tasks
 

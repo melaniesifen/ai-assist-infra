@@ -6,6 +6,9 @@ export interface TargetDeploymentConfig {
   readonly hostedZoneId: string;
   readonly hostedZoneName: string;
   readonly sseDomainName: string;
+  readonly productAuthHostedUiCallbackUrls: readonly string[];
+  readonly productAuthHostedUiLogoutUrls: readonly string[];
+  readonly productAuthHostedUiDomainPrefix?: string;
   readonly allowedProductUsers: readonly AllowedProductUserConfig[];
   readonly trustedUserTenantId: string;
   readonly trustedUserUserId: string;
@@ -43,6 +46,12 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const hostedZoneId = requireString(value.hostedZoneId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneId`);
   const hostedZoneName = normalizeDomainName(requireString(value.hostedZoneName, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneName`));
   const sseDomainName = normalizeDomainName(requireString(value.sseDomainName, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.sseDomainName`));
+  const productAuthHostedUiCallbackUrls = parseHostedUiUrls(value.productAuthHostedUiCallbackUrls, environmentName, "productAuthHostedUiCallbackUrls");
+  const productAuthHostedUiLogoutUrls = parseHostedUiUrls(value.productAuthHostedUiLogoutUrls, environmentName, "productAuthHostedUiLogoutUrls");
+  const productAuthHostedUiDomainPrefix =
+    value.productAuthHostedUiDomainPrefix === undefined
+      ? undefined
+      : normalizeHostedUiDomainPrefix(requireString(value.productAuthHostedUiDomainPrefix, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthHostedUiDomainPrefix`), environmentName);
   const edgeJwtAuthEnabled = value.edgeJwtAuthEnabled !== undefined ? requireBoolean(value.edgeJwtAuthEnabled, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled`) : true;
   const allowedProductUsers = parseAllowedProductUsers(value.allowedProductUsers, environmentName);
   const trustedUserTenantId = requireString(value.trustedUserTenantId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserTenantId`);
@@ -60,6 +69,8 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   if (!isValidDnsName(sseDomainName) || !isSubdomainOf(sseDomainName, hostedZoneName)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.sseDomainName must be a subdomain of hostedZoneName`);
   }
+  validateHostedUiUrls(productAuthHostedUiCallbackUrls, environmentName, "productAuthHostedUiCallbackUrls");
+  validateHostedUiUrls(productAuthHostedUiLogoutUrls, environmentName, "productAuthHostedUiLogoutUrls");
   const webAppDomainName = getWebAppDomainName(webAppBaseUrl);
   if (!isValidDnsName(webAppDomainName) || !isSubdomainOf(webAppDomainName, hostedZoneName)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl host must be a subdomain of hostedZoneName`);
@@ -74,6 +85,9 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
     hostedZoneId,
     hostedZoneName,
     sseDomainName,
+    productAuthHostedUiCallbackUrls,
+    productAuthHostedUiLogoutUrls,
+    productAuthHostedUiDomainPrefix,
     allowedProductUsers,
     trustedUserTenantId,
     trustedUserUserId,
@@ -82,6 +96,64 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
     googleOAuthClientId,
     edgeJwtAuthEnabled
   };
+}
+
+function parseHostedUiUrls(value: unknown, environmentName: EnvironmentName, fieldName: string): string[] {
+  const qualifiedName = `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.${fieldName}`;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${qualifiedName} must include at least one HTTPS redirect URL`);
+  }
+  return value.map((item, index) => normalizeHostedUiUrl(requireString(item, `${qualifiedName}[${index}]`), `${qualifiedName}[${index}]`));
+}
+
+function normalizeHostedUiUrl(value: string, fieldName: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new Error(`${fieldName} must be an HTTPS URL without credentials, query, or fragment`);
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error(`${fieldName} must be an HTTPS URL without credentials, query, or fragment`);
+  }
+  return parsed.toString();
+}
+
+function validateHostedUiUrls(urls: readonly string[], environmentName: EnvironmentName, fieldName: string): void {
+  const seen = new Set<string>();
+  for (const url of urls) {
+    if (seen.has(url)) {
+      throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.${fieldName} values must be unique`);
+    }
+    seen.add(url);
+
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const devOnlyRedirect = isPlaceholderUrl(url) || isLoopbackHost(host) || host.endsWith(".extensions.allizom.org");
+    if (environmentName !== "dev" && devOnlyRedirect) {
+      throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.${fieldName} must not include localhost, placeholder, or temporary dev extension redirect URLs`);
+    }
+  }
+}
+
+function isPlaceholderUrl(url: string): boolean {
+  return /(?:replace-with|extension-id|<|>|example)/i.test(url);
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+
+function normalizeHostedUiDomainPrefix(value: string, environmentName: EnvironmentName): string {
+  const normalized = value.trim().toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(normalized)) {
+    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthHostedUiDomainPrefix must be 1-63 lowercase letters, numbers, or hyphens without leading or trailing hyphens`);
+  }
+  if (environmentName !== "dev" && normalized.includes("dev")) {
+    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthHostedUiDomainPrefix must not include dev`);
+  }
+  return normalized;
 }
 
 function parseAllowedProductUsers(value: unknown, environmentName: EnvironmentName): AllowedProductUserConfig[] {

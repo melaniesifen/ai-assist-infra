@@ -17,6 +17,14 @@ const TEST_DEPLOYMENT_CONFIG: TargetDeploymentConfig = {
   hostedZoneId: "Z1234567890ABC",
   hostedZoneName: "example.test",
   sseDomainName: "sse.dev.example.test",
+  productAuthHostedUiCallbackUrls: [
+    "https://dev-extension.chromiumapp.org/",
+    "https://dev-extension.extensions.allizom.org/"
+  ],
+  productAuthHostedUiLogoutUrls: [
+    "https://dev-extension.chromiumapp.org/",
+    "https://dev-extension.extensions.allizom.org/"
+  ],
   edgeJwtAuthEnabled: true,
   allowedProductUsers: [
     {
@@ -49,7 +57,10 @@ const TEST_DEV_EDGE_AUTH_DISABLED_CONFIG = {
 const TEST_PRODUCT_AUTH: ProductAuthResources = {
   issuer: "https://cognito-idp.us-west-2.amazonaws.com/test-user-pool",
   audience: "test-product-auth-client",
-  userPoolId: "test-user-pool"
+  userPoolId: "test-user-pool",
+  hostedUiOrigin: "https://test-product-auth.auth.us-west-2.amazoncognito.com",
+  callbackUrls: TEST_DEPLOYMENT_CONFIG.productAuthHostedUiCallbackUrls,
+  logoutUrls: TEST_DEPLOYMENT_CONFIG.productAuthHostedUiLogoutUrls
 };
 
 function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): Template {
@@ -191,6 +202,7 @@ test("synthesizes product auth as a target-scoped stack", () => {
   const app = new cdk.App();
   const stack = new AiAssistProductAuthStack(app, "AiAssistDevAuthStack", {
     deploymentTarget: target,
+    deploymentConfig: TEST_DEPLOYMENT_CONFIG,
     stackName: "AiAssistDevAuthStack",
     env: {
       account: "111111111111",
@@ -208,7 +220,32 @@ test("synthesizes product auth as a target-scoped stack", () => {
       Ref: Match.stringLikeRegexp("ProductAuthUserPool")
     },
     GenerateSecret: false,
-    PreventUserExistenceErrors: "ENABLED"
+    PreventUserExistenceErrors: "ENABLED",
+    AllowedOAuthFlowsUserPoolClient: true,
+    AllowedOAuthFlows: ["implicit"],
+    AllowedOAuthScopes: ["openid", "email", "profile"],
+    CallbackURLs: [
+      "https://dev-extension.chromiumapp.org/",
+      "https://dev-extension.extensions.allizom.org/"
+    ],
+    LogoutURLs: [
+      "https://dev-extension.chromiumapp.org/",
+      "https://dev-extension.extensions.allizom.org/"
+    ],
+    AccessTokenValidity: 60,
+    IdTokenValidity: 60,
+    RefreshTokenValidity: 1440,
+    TokenValidityUnits: {
+      AccessToken: "minutes",
+      IdToken: "minutes",
+      RefreshToken: "minutes"
+    }
+  });
+  template.hasResourceProperties("AWS::Cognito::UserPoolDomain", {
+    Domain: "ai-assist-dev-us-west-2-product-auth",
+    UserPoolId: {
+      Ref: Match.stringLikeRegexp("ProductAuthUserPool")
+    }
   });
   template.hasResourceProperties("AWS::Cognito::UserPoolGroup", {
     GroupName: "owner"
@@ -228,6 +265,23 @@ test("synthesizes product auth as a target-scoped stack", () => {
     Value: {
       Ref: Match.stringLikeRegexp("ProductAuthUserPool")
     }
+  });
+  template.hasOutput("ProductAuthHostedUiOrigin", {
+    Value: Match.anyValue()
+  });
+  template.hasOutput("ProductAuthAppClientId", {
+    Value: {
+      Ref: Match.stringLikeRegexp("ProductAuthUserPoolProductAuthAppClient")
+    }
+  });
+  template.hasOutput("ProductAuthOAuthScopes", {
+    Value: "openid,email,profile"
+  });
+  template.hasOutput("ProductAuthCallbackUrls", {
+    Value: "https://dev-extension.chromiumapp.org/,https://dev-extension.extensions.allizom.org/"
+  });
+  template.hasOutput("ProductAuthLogoutUrls", {
+    Value: "https://dev-extension.chromiumapp.org/,https://dev-extension.extensions.allizom.org/"
   });
 });
 

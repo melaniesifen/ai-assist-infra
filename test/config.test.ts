@@ -749,6 +749,8 @@ test("parses local deployment config from CDK context without exposing secrets",
         hostedZoneId: "Z1234567890ABC",
         hostedZoneName: "example.test",
         sseDomainName: "sse.dev.example.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
         edgeJwtAuthEnabled: true,
         allowedProductUsers: [
           {
@@ -783,6 +785,14 @@ test("parses local deployment config from CDK context without exposing secrets",
   assert.equal(config.webAppBaseUrl, "https://dev.example.test");
   assert.equal(getWebAppDomainName(config.webAppBaseUrl), "dev.example.test");
   assert.equal(config.googleOAuthClientId, "dev-google-client-id.apps.googleusercontent.com");
+  assert.deepEqual(config.productAuthHostedUiCallbackUrls, [
+    "https://dev-extension.chromiumapp.org/",
+    "https://dev-extension.extensions.allizom.org/"
+  ]);
+  assert.deepEqual(config.productAuthHostedUiLogoutUrls, [
+    "https://dev-extension.chromiumapp.org/",
+    "https://dev-extension.extensions.allizom.org/"
+  ]);
   assert.equal(config.edgeJwtAuthEnabled, true);
   assert.equal(
     parseDeploymentConfigContext(
@@ -791,6 +801,8 @@ test("parses local deployment config from CDK context without exposing secrets",
           hostedZoneId: "Z1234567890ABC",
           hostedZoneName: "example.test",
           sseDomainName: "sse.dev.example.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
           edgeJwtAuthEnabled: false,
           allowedProductUsers: [],
           trustedUserTenantId: "dev-tenant",
@@ -811,6 +823,8 @@ test("parses local deployment config from CDK context without exposing secrets",
           hostedZoneId: "Z1234567890ABC",
           hostedZoneName: "example.test",
           sseDomainName: "sse.dev.example.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
           edgeJwtAuthEnabled: true,
           allowedProductUsers: [],
           trustedUserTenantId: "dev-tenant",
@@ -833,6 +847,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneId: "not-a-zone-id",
             hostedZoneName: "example.test",
             sseDomainName: "sse.dev.example.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
             edgeJwtAuthEnabled: true,
             allowedProductUsers: [
               {
@@ -862,6 +878,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneId: "Z1234567890ABC",
             hostedZoneName: "example.test",
             sseDomainName: "sse.other.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
             edgeJwtAuthEnabled: true,
             allowedProductUsers: [
               {
@@ -891,6 +909,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneId: "Z1234567890ABC",
             hostedZoneName: "example.test",
             sseDomainName: "sse.dev.example.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
             edgeJwtAuthEnabled: true,
             allowedProductUsers: [
               {
@@ -920,6 +940,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneId: "Z1234567890ABC",
             hostedZoneName: "example.test",
             sseDomainName: "sse.dev.example.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
             edgeJwtAuthEnabled: true,
             allowedProductUsers: [
               {
@@ -956,6 +978,8 @@ test("parses local deployment config from CDK context without exposing secrets",
               hostedZoneId: "Z1234567890ABC",
               hostedZoneName: "example.test",
               sseDomainName: "sse.dev.example.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
               edgeJwtAuthEnabled: true,
               allowedProductUsers: [
                 {
@@ -987,6 +1011,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             hostedZoneId: "Z1234567890ABC",
             hostedZoneName: "example.test",
             sseDomainName: "sse.gamma.example.test",
+            productAuthHostedUiCallbackUrls: ["https://gamma-extension.chromiumapp.org/"],
+            productAuthHostedUiLogoutUrls: ["https://gamma-extension.chromiumapp.org/"],
             edgeJwtAuthEnabled: false,
             allowedProductUsers: [
               {
@@ -1008,6 +1034,102 @@ test("parses local deployment config from CDK context without exposing secrets",
       ),
     /edgeJwtAuthEnabled may be false only for dev/
   );
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          gamma: {
+            hostedZoneId: "Z1234567890ABC",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.gamma.example.test",
+            productAuthHostedUiCallbackUrls: ["https://replace-with-extension-id.chromiumapp.org/"],
+            productAuthHostedUiLogoutUrls: ["https://gamma-extension.chromiumapp.org/"],
+            edgeJwtAuthEnabled: true,
+            allowedProductUsers: [
+              {
+                authSubject: "cognito-subject-a",
+                tenantId: "tenant-a",
+                userId: "user-a",
+                role: "owner",
+                status: "active"
+              }
+            ],
+            trustedUserTenantId: "gamma-tenant",
+            trustedUserUserId: "gamma-user",
+            trustedUserAuthSubject: "trusted-user:gamma-user",
+            webAppBaseUrl: "https://gamma.example.test",
+            googleOAuthClientId: "gamma-google-client-id.apps.googleusercontent.com"
+          }
+        },
+        "gamma"
+      ),
+    /must not include localhost, placeholder, or temporary dev extension redirect URLs/
+  );
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          prod: {
+            hostedZoneId: "Z1234567890ABC",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.example.test",
+            productAuthHostedUiCallbackUrls: ["https://prod-release.chromiumapp.org/"],
+            productAuthHostedUiLogoutUrls: ["https://prod-extension-id.chromiumapp.org/"],
+            edgeJwtAuthEnabled: true,
+            allowedProductUsers: [
+              {
+                authSubject: "cognito-subject-a",
+                tenantId: "tenant-a",
+                userId: "user-a",
+                role: "owner",
+                status: "active"
+              }
+            ],
+            trustedUserTenantId: "prod-tenant",
+            trustedUserUserId: "prod-user",
+            trustedUserAuthSubject: "trusted-user:prod-user",
+            webAppBaseUrl: "https://app.example.test",
+            googleOAuthClientId: "prod-google-client-id.apps.googleusercontent.com"
+          }
+        },
+        "prod"
+      ),
+    /must not include localhost, placeholder, or temporary dev extension redirect URLs/
+  );
+  for (const fieldName of ["productAuthHostedUiCallbackUrls", "productAuthHostedUiLogoutUrls"] as const) {
+    assert.throws(
+      () =>
+        parseDeploymentConfigContext(
+          {
+            gamma: {
+              hostedZoneId: "Z1234567890ABC",
+              hostedZoneName: "example.test",
+              sseDomainName: "sse.gamma.example.test",
+              productAuthHostedUiCallbackUrls: fieldName === "productAuthHostedUiCallbackUrls" ? ["https://[::1]/"] : ["https://gamma-release.chromiumapp.org/"],
+              productAuthHostedUiLogoutUrls: fieldName === "productAuthHostedUiLogoutUrls" ? ["https://[::1]/"] : ["https://gamma-release.chromiumapp.org/"],
+              edgeJwtAuthEnabled: true,
+              allowedProductUsers: [
+                {
+                  authSubject: "cognito-subject-a",
+                  tenantId: "tenant-a",
+                  userId: "user-a",
+                  role: "owner",
+                  status: "active"
+                }
+              ],
+              trustedUserTenantId: "gamma-tenant",
+              trustedUserUserId: "gamma-user",
+              trustedUserAuthSubject: "trusted-user:gamma-user",
+              webAppBaseUrl: "https://gamma.example.test",
+              googleOAuthClientId: "gamma-google-client-id.apps.googleusercontent.com"
+            }
+          },
+          "gamma"
+        ),
+      /must not include localhost, placeholder, or temporary dev extension redirect URLs/,
+      `${fieldName} must reject IPv6 loopback for gamma`
+    );
+  }
 });
 
 test("defines canonical M9 auth OAuth resource action and SSE route contract", () => {

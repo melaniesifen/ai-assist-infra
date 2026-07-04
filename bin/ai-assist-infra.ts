@@ -23,6 +23,7 @@ for (const target of targets) {
   const deploymentConfig = parseDeploymentConfigContext(app.node.tryGetContext(DEPLOYMENT_CONFIG_CONTEXT_KEY), target.environmentName);
   const authStack = new AiAssistProductAuthStack(app, authStackName(target.stackName), {
     deploymentTarget: target,
+    deploymentConfig,
     env: {
       account,
       region: target.region
