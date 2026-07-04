@@ -16,7 +16,8 @@ const TEST_DEPLOYMENT_CONFIG = {
   edgeJwtAuthEnabled: true,
   productAuthIssuer: "https://auth.test.example/",
   productAuthAudience: "ai-assist-test",
-  trustedUserTenantId: "test-tenant"
+  trustedUserTenantId: "test-tenant",
+  trustedUserUserId: "test-user"
 };
 
 const TEST_DEV_EDGE_AUTH_DISABLED_CONFIG = {
@@ -339,6 +340,10 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
           {
             Name: "TRUSTED_USER_TENANT_ID",
             Value: "test-tenant"
+          },
+          {
+            Name: "TRUSTED_USER_USER_ID",
+            Value: "test-user"
           },
           {
             Name: "PRODUCT_AUTH_AUDIENCE",

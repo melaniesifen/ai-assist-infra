@@ -121,7 +121,8 @@ test("parses local deployment config from CDK context without exposing secrets",
         edgeJwtAuthEnabled: true,
         productAuthIssuer: "https://auth.dev.example.test/",
         productAuthAudience: "ai-assist-dev",
-        trustedUserTenantId: "dev-tenant"
+        trustedUserTenantId: "dev-tenant",
+        trustedUserUserId: "dev-user"
       }
     },
     "dev"
@@ -130,6 +131,7 @@ test("parses local deployment config from CDK context without exposing secrets",
   assert.equal(config.productAuthAudience, "ai-assist-dev");
   assert.equal(config.productAuthIssuer, "https://auth.dev.example.test/");
   assert.equal(config.trustedUserTenantId, "dev-tenant");
+  assert.equal(config.trustedUserUserId, "dev-user");
   assert.equal(config.edgeJwtAuthEnabled, true);
   assert.equal(
     parseDeploymentConfigContext(
@@ -140,7 +142,8 @@ test("parses local deployment config from CDK context without exposing secrets",
           sseDomainName: "sse.dev.example.test",
           edgeJwtAuthEnabled: false,
           productAuthAudience: "ai-assist-dev",
-          trustedUserTenantId: "dev-tenant"
+          trustedUserTenantId: "dev-tenant",
+          trustedUserUserId: "dev-user"
         }
       },
       "dev"
@@ -159,7 +162,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             edgeJwtAuthEnabled: true,
             productAuthIssuer: "http://auth.dev.example.test/",
             productAuthAudience: "ai-assist-dev",
-            trustedUserTenantId: "dev-tenant"
+            trustedUserTenantId: "dev-tenant",
+            trustedUserUserId: "dev-user"
           }
         },
         "dev"
@@ -177,7 +181,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             edgeJwtAuthEnabled: true,
             productAuthIssuer: "https://auth.dev.example.test/",
             productAuthAudience: "ai-assist-dev",
-            trustedUserTenantId: "dev-tenant"
+            trustedUserTenantId: "dev-tenant",
+            trustedUserUserId: "dev-user"
           }
         },
         "dev"
@@ -194,7 +199,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             sseDomainName: "sse.gamma.example.test",
             edgeJwtAuthEnabled: false,
             productAuthAudience: "ai-assist-gamma",
-            trustedUserTenantId: "gamma-tenant"
+            trustedUserTenantId: "gamma-tenant",
+            trustedUserUserId: "gamma-user"
           }
         },
         "gamma"
