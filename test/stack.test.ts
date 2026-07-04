@@ -303,6 +303,10 @@ test("synthesizes one shared Fargate runtime and public ALB for API and SSE", ()
     Type: "A",
     HostedZoneId: "Z1234567890ABC"
   });
+  assert.ok(
+    "SessionEventsSseDnsRecordD5FFBB2B" in (template.toJSON().Resources as Record<string, unknown>),
+    "SSE DNS record must keep the old logical id so dev updates do not create a duplicate Route53 record"
+  );
   template.hasResourceProperties("AWS::ECS::Service", {
     ServiceName: "ai-assist-dev-us-west-2-dogfood-runtime",
     PlatformVersion: "LATEST"

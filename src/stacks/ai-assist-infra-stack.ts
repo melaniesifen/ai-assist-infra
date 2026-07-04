@@ -468,7 +468,7 @@ exports.handler = async (event) => {
       },
       deregistrationDelay: cdk.Duration.seconds(30)
     });
-    new route53.ARecord(this, `${serviceId}DnsRecord`, {
+    new route53.ARecord(this, "SessionEventsSseDnsRecord", {
       zone: hostedZone,
       recordName: deploymentConfig.sseDomainName,
       target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(loadBalancer))
