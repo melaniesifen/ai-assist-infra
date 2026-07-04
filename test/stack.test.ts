@@ -17,7 +17,8 @@ const TEST_DEPLOYMENT_CONFIG = {
   productAuthIssuer: "https://auth.test.example/",
   productAuthAudience: "ai-assist-test",
   trustedUserTenantId: "test-tenant",
-  trustedUserUserId: "test-user"
+  trustedUserUserId: "test-user",
+  trustedUserAuthSubject: "trusted-user:test-user"
 };
 
 const TEST_DEV_EDGE_AUTH_DISABLED_CONFIG = {
@@ -344,6 +345,10 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
           {
             Name: "TRUSTED_USER_USER_ID",
             Value: "test-user"
+          },
+          {
+            Name: "TRUSTED_USER_AUTH_SUBJECT",
+            Value: "trusted-user:test-user"
           },
           {
             Name: "PRODUCT_AUTH_AUDIENCE",

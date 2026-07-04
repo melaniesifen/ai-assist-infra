@@ -8,7 +8,8 @@
       "productAuthIssuer": "https://auth.dev.example.test/",
       "productAuthAudience": "ai-assist-dev",
       "trustedUserTenantId": "dev-tenant",
-      "trustedUserUserId": "dev-user"
+      "trustedUserUserId": "dev-user",
+      "trustedUserAuthSubject": "trusted-user:dev-user"
     },
     "gamma": {
       "hostedZoneId": "Z1234567890ABC",
@@ -18,7 +19,8 @@
       "productAuthIssuer": "https://auth.gamma.example.test/",
       "productAuthAudience": "ai-assist-gamma",
       "trustedUserTenantId": "gamma-tenant",
-      "trustedUserUserId": "gamma-user"
+      "trustedUserUserId": "gamma-user",
+      "trustedUserAuthSubject": "trusted-user:gamma-user"
     },
     "prod": {
       "hostedZoneId": "Z1234567890ABC",
@@ -28,7 +30,8 @@
       "productAuthIssuer": "https://auth.example.test/",
       "productAuthAudience": "ai-assist-prod",
       "trustedUserTenantId": "prod-tenant",
-      "trustedUserUserId": "prod-user"
+      "trustedUserUserId": "prod-user",
+      "trustedUserAuthSubject": "trusted-user:prod-user"
     }
   }
 }

@@ -156,6 +156,7 @@ ProductAuthIssuer
 ProductAuthAudience
 TrustedUserTenantId
 TrustedUserUserId
+TrustedUserAuthSubject
 ```
 
 `ProductAuthAudience` is also injected into the shared dogfood runtime as
@@ -172,6 +173,8 @@ secret, but it should be stable for a target so issued sessions and stored
 tenant-scoped records agree on the same tenant identifier.
 `TrustedUserUserId` is injected as `TRUSTED_USER_USER_ID` and should also remain
 stable for the target's dogfood user.
+`TrustedUserAuthSubject` is injected as `TRUSTED_USER_AUTH_SUBJECT`; in trusted
+bootstrap mode it can be a stable local subject such as `trusted-user:dev-user`.
 
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses
@@ -212,7 +215,8 @@ Example local context shape:
       "productAuthIssuer": "https://auth.dev.example.test/",
       "productAuthAudience": "ai-assist-dev",
       "trustedUserTenantId": "dev-tenant",
-      "trustedUserUserId": "dev-user"
+      "trustedUserUserId": "dev-user",
+      "trustedUserAuthSubject": "trusted-user:dev-user"
     }
   }
 }

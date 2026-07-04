@@ -10,6 +10,7 @@ export interface TargetDeploymentConfig {
   readonly productAuthAudience: string;
   readonly trustedUserTenantId: string;
   readonly trustedUserUserId: string;
+  readonly trustedUserAuthSubject: string;
   readonly edgeJwtAuthEnabled: boolean;
 }
 
@@ -38,6 +39,7 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const productAuthAudience = requireString(value.productAuthAudience, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthAudience`);
   const trustedUserTenantId = requireString(value.trustedUserTenantId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserTenantId`);
   const trustedUserUserId = requireString(value.trustedUserUserId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserUserId`);
+  const trustedUserAuthSubject = requireString(value.trustedUserAuthSubject, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserAuthSubject`);
 
   if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneId must be a Route 53 hosted zone id`);
@@ -70,6 +72,7 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
     productAuthAudience,
     trustedUserTenantId,
     trustedUserUserId,
+    trustedUserAuthSubject,
     edgeJwtAuthEnabled
   };
 }
