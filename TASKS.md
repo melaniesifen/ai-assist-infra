@@ -62,6 +62,7 @@ Relevant LLDs:
 - [x] M9-T9 route/runtime contract slice: align the typed route inventory and assertions to canonical deployed-dev paths: `/oauth/google/*`, `/sessions/{sessionId}/events`, auth login/logout/session, resource-session commands/actions/apply, and `GET /health` as the only intentionally placeholder-backed route.
 - [x] M9-T9 route/runtime contract slice: document the API Gateway JWT/OIDC issuer, audience, and JWKS discovery requirements plus the trusted-user login and OAuth callback edge-auth exceptions that must be validated by the auth service.
 - [x] Add a dev-only `edgeJwtAuthEnabled=false` infra-health bypass for API Gateway JWT authorizer creation while keeping gamma/prod edge auth strict.
+- [x] M9-T9 auth runtime slice: update the shared Python service container to install repo dependencies and delegate non-health requests to service-provided HTTP adapters, preserving safe `501` fallback for services that do not yet provide one.
 
 ## Future Production Tasks
 

@@ -15,7 +15,8 @@ COPY health_server.py /app/health_server.py
 COPY --from=service pyproject.toml /app/service/pyproject.toml
 COPY --from=service src /app/service/src
 
-RUN python -m compileall /app/service/src
+RUN python -m pip install --no-cache-dir /app/service \
+    && python -m compileall /app/service/src
 
 USER 65534:65534
 EXPOSE 8080

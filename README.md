@@ -11,7 +11,11 @@ DynamoDB, KMS, IAM boundary, and rate-limit contracts.
 
 - `bin/ai-assist-infra.ts`: CDK app entry point.
 - `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP route integrations, CDK-built Fargate service image assets, public ALB SSE hosting, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
-- `docker/python-service/`: shared Python service image build context. The image compiles the selected service package and serves a metadata-only `/health` endpoint; unimplemented product routes return a safe `501` until each service repo adds production HTTP adapters.
+- `docker/python-service/`: shared Python service image build context. The image
+  installs and compiles the selected service package, serves a metadata-only
+  `/health` endpoint, and delegates product routes to a service-provided
+  `http_app.handle_http_request` when present; otherwise unimplemented product
+  routes return a safe `501`.
 - `src/config/*.ts`: typed deployment target, runtime config, route, DynamoDB, KMS, rate-limit, IAM boundary, and operational guardrail inventories.
 - `test/*.test.ts`: Node built-in tests plus CDK assertion tests.
 - `cdk.json`, `tsconfig.json`, `package.json`, and `package-lock.json`: repo-local CDK and TypeScript tooling.

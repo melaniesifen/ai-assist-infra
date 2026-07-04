@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "unknown-service")
 PYTHON_PACKAGE = os.environ.get("PYTHON_PACKAGE", "")
 SERVICE_PORT = int(os.environ.get("SERVICE_PORT", "8080"))
+_SERVICE_HTTP_HANDLER = None
 
 
 def package_status() -> dict[str, Any]:
@@ -23,6 +24,15 @@ def package_status() -> dict[str, Any]:
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
+        self._handle()
+
+    def do_POST(self) -> None:
+        self._handle()
+
+    def do_DELETE(self) -> None:
+        self._handle()
+
+    def _handle(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/health":
             status = package_status()
@@ -36,6 +46,37 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return
+
+        handler = service_http_handler()
+        if handler is not None:
+            try:
+                content_length = int(self.headers.get("Content-Length", "0") or "0")
+                body = self.rfile.read(content_length) if content_length else b""
+                response = handler(
+                    method=self.command,
+                    path=parsed.path,
+                    query_string=parsed.query,
+                    headers={key: value for key, value in self.headers.items()},
+                    body=body,
+                )
+                self._write_response(response)
+                return
+            except Exception as error:
+                self._write_json(
+                    500,
+                    {
+                        "error": {
+                            "code": "SERVICE_HTTP_HANDLER_FAILED",
+                            "category": "DEPENDENCY",
+                            "message": "The service HTTP adapter failed before returning a response.",
+                            "retryable": True,
+                            "errorType": type(error).__name__,
+                        },
+                        "service": SERVICE_NAME,
+                        "route": parsed.path,
+                    },
+                )
+                return
 
         self._write_json(
             501,
@@ -56,8 +97,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def _write_json(self, status_code: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        self._write_response(
+            {
+                "status": status_code,
+                "headers": {"Content-Type": "application/json"},
+                "body": body,
+            }
+        )
+
+    def _write_response(self, response: dict[str, Any]) -> None:
+        body = response.get("body", b"")
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        status_code = int(response.get("status", 500))
         self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
+        for key, value in response.get("headers", {}).items():
+            self.send_header(key, str(value))
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -66,6 +121,19 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", SERVICE_PORT), Handler)
     server.serve_forever()
+
+
+def service_http_handler() -> Any:
+    global _SERVICE_HTTP_HANDLER
+    if _SERVICE_HTTP_HANDLER is not None:
+        return _SERVICE_HTTP_HANDLER
+    try:
+        module = importlib.import_module(f"{PYTHON_PACKAGE}.http_app")
+        handler = getattr(module, "handle_http_request", None)
+        _SERVICE_HTTP_HANDLER = handler if callable(handler) else False
+    except Exception:
+        _SERVICE_HTTP_HANDLER = False
+    return _SERVICE_HTTP_HANDLER or None
 
 
 if __name__ == "__main__":
