@@ -267,7 +267,7 @@ test("synthesizes product auth as a target-scoped stack", () => {
     }
   });
   template.hasOutput("ProductAuthHostedUiOrigin", {
-    Value: Match.anyValue()
+    Value: "https://ai-assist-dev-us-west-2-product-auth.auth.us-west-2.amazoncognito.com"
   });
   template.hasOutput("ProductAuthAppClientId", {
     Value: {

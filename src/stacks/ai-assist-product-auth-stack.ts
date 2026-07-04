@@ -72,11 +72,12 @@ export class AiAssistProductAuthStack extends cdk.Stack {
       refreshTokenValidity: cdk.Duration.days(1),
       authSessionValidity: cdk.Duration.minutes(15)
     });
-    const hostedUiDomain = userPool.addDomain("ProductAuthHostedUiDomain", {
+    userPool.addDomain("ProductAuthHostedUiDomain", {
       cognitoDomain: {
         domainPrefix: hostedUiDomainPrefix
       }
     });
+    const hostedUiOrigin = cdk.Fn.join("", ["https://", hostedUiDomainPrefix, ".auth.", cdk.Stack.of(this).region, ".amazoncognito.com"]);
 
     for (const groupName of PRODUCT_AUTH_GROUPS) {
       new cognito.CfnUserPoolGroup(this, `${toPascalCase(groupName)}ProductAuthGroup`, {
@@ -92,7 +93,7 @@ export class AiAssistProductAuthStack extends cdk.Stack {
       issuer: cdk.Fn.join("", ["https://cognito-idp.", cdk.Stack.of(this).region, ".amazonaws.com/", userPool.userPoolId]),
       audience: appClient.userPoolClientId,
       userPoolId: userPool.userPoolId,
-      hostedUiOrigin: cdk.Fn.join("", ["https://", hostedUiDomain.domainName]),
+      hostedUiOrigin,
       callbackUrls,
       logoutUrls
     };
