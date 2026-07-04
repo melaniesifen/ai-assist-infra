@@ -28,12 +28,14 @@ export interface RuntimeConfigValidationResult {
 export const REQUIRED_RUNTIME_CONFIG: readonly RuntimeConfigRequirement[] = Object.freeze([
   requirement("PRODUCT_AUTH_ISSUER", RUNTIME_CONFIG_CATEGORIES.PRODUCT_AUTH, "Product auth token issuer."),
   requirement("PRODUCT_AUTH_AUDIENCE", RUNTIME_CONFIG_CATEGORIES.PRODUCT_AUTH, "Product auth token audience."),
+  requirement("PRODUCT_AUTH_HMAC_SECRET", RUNTIME_CONFIG_CATEGORIES.PRODUCT_AUTH, "Product auth HMAC signing secret.", true),
   requirement("WEB_APP_BASE_URL", RUNTIME_CONFIG_CATEGORIES.CORS, "Trusted web app base URL."),
   requirement("API_BASE_URL", RUNTIME_CONFIG_CATEGORIES.SERVICE_URL, "Public HTTP API base URL."),
   requirement("SSE_BASE_URL", RUNTIME_CONFIG_CATEGORIES.SERVICE_URL, "Public SSE base URL."),
   requirement("GOOGLE_OAUTH_CLIENT_ID", RUNTIME_CONFIG_CATEGORIES.GOOGLE_OAUTH, "Google OAuth client ID."),
   requirement("GOOGLE_OAUTH_CLIENT_SECRET_REF", RUNTIME_CONFIG_CATEGORIES.GOOGLE_OAUTH, "Secret reference for the Google OAuth client secret.", true),
   requirement("GOOGLE_OAUTH_CALLBACK_URL", RUNTIME_CONFIG_CATEGORIES.GOOGLE_OAUTH, "Configured OAuth callback URL."),
+  requirement("OAUTH_STATE_SIGNING_SECRET", RUNTIME_CONFIG_CATEGORIES.GOOGLE_OAUTH, "Google OAuth state signing secret.", true),
   requirement("APP_KMS_KEY_ID", RUNTIME_CONFIG_CATEGORIES.TOKEN_ENCRYPTION, "Shared app KMS key ID or ARN."),
   requirement("PLATFORM_PROVIDER_SECRET_REF_OPENAI", RUNTIME_CONFIG_CATEGORIES.PLATFORM_PROVIDER, "Secret reference for the platform-owned OpenAI credential.", true),
   requirement("PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC", RUNTIME_CONFIG_CATEGORIES.PLATFORM_PROVIDER, "Secret reference for the platform-owned Anthropic credential.", true),
@@ -50,7 +52,11 @@ export const REQUIRED_RUNTIME_CONFIG: readonly RuntimeConfigRequirement[] = Obje
   requirement("SSE_HEARTBEAT_SECONDS", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "SSE heartbeat interval in seconds."),
   requirement("SSE_REPLAY_WINDOW_SECONDS", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "SSE replay window in seconds."),
   requirement("ALLOWED_ORIGINS", RUNTIME_CONFIG_CATEGORIES.CORS, "Comma-separated trusted frontend origins."),
-  requirement("TRUSTED_USER_MODE", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Must be true for trusted-user dogfooding.")
+  requirement("TRUSTED_USER_MODE", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Must be true for trusted-user dogfooding."),
+  requirement("TRUSTED_USER_TENANT_ID", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Stable trusted-user tenant id."),
+  requirement("TRUSTED_USER_USER_ID", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Stable trusted-user user id."),
+  requirement("TRUSTED_USER_AUTH_SUBJECT", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Stable trusted-user auth subject."),
+  requirement("TRUSTED_USER_BOOTSTRAP_SECRET", RUNTIME_CONFIG_CATEGORIES.TRUSTED_USER, "Trusted-user bootstrap login secret.", true)
 ]);
 
 export function validateRuntimeConfig(config: Record<string, string | undefined>): RuntimeConfigValidationResult {

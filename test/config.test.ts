@@ -305,6 +305,21 @@ test("keeps KMS purpose validation while resolving to one shared app key", () =>
 
 test("validates trusted-user runtime config without leaking secret values", () => {
   const validConfig = Object.fromEntries(REQUIRED_RUNTIME_CONFIG.map((entry) => [entry.name, "configured"]));
+  const requirementsByName = new Map(REQUIRED_RUNTIME_CONFIG.map((entry) => [entry.name, entry]));
+  const requiredAuthRuntimeKeys = [
+    "PRODUCT_AUTH_HMAC_SECRET",
+    "OAUTH_STATE_SIGNING_SECRET",
+    "TRUSTED_USER_TENANT_ID",
+    "TRUSTED_USER_USER_ID",
+    "TRUSTED_USER_AUTH_SUBJECT",
+    "TRUSTED_USER_BOOTSTRAP_SECRET"
+  ];
+  for (const key of requiredAuthRuntimeKeys) {
+    assert.ok(requirementsByName.has(key), `${key} must be part of the runtime readiness inventory`);
+  }
+  for (const key of ["PRODUCT_AUTH_HMAC_SECRET", "OAUTH_STATE_SIGNING_SECRET", "TRUSTED_USER_BOOTSTRAP_SECRET"]) {
+    assert.equal(requirementsByName.get(key)?.secret, true, `${key} must be marked secret`);
+  }
   validConfig.WEB_APP_BASE_URL = "https://example.test";
   validConfig.API_BASE_URL = "https://api.example.test";
   validConfig.SSE_BASE_URL = "https://sse.example.test";
@@ -316,6 +331,14 @@ test("validates trusted-user runtime config without leaking secret values", () =
   validConfig.SSE_REPLAY_WINDOW_SECONDS = "300";
   validConfig.TRUSTED_USER_MODE = "true";
   assert.equal(validateRuntimeConfig(validConfig).valid, true);
+
+  const missingAuthRuntimeKey = validateRuntimeConfig({
+    ...validConfig,
+    OAUTH_STATE_SIGNING_SECRET: undefined
+  });
+  assert.equal(missingAuthRuntimeKey.valid, false);
+  assert.equal(missingAuthRuntimeKey.setupStatus, "blocked");
+  assert.deepEqual(missingAuthRuntimeKey.missing, ["OAUTH_STATE_SIGNING_SECRET"]);
 
   const invalid = validateRuntimeConfig({
     ...validConfig,
