@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PYTHON_SERVICE_BASE_IMAGE, PYTHON_SERVICE_CONTAINER_ASSETS, validateContainerAssetConfig } from "../src/config/container-assets";
 import { DEPLOYMENT_CONFIG_CONTEXT_KEY, getWebAppDomainName, parseDeploymentConfigContext } from "../src/config/deployment-config";
+import { buildDogfoodRuntimeSourceHash } from "../src/config/dogfood-runtime-source-hash";
 import { getDynamoDbTableSpec, listDynamoDbTableSpecs } from "../src/config/dynamodb-tables";
 import {
   buildEnvironmentResourceName,
@@ -100,6 +102,32 @@ test("defines a dogfood runtime image that includes every service package", () =
   }
 });
 
+test("dogfood runtime source hash changes when service source changes", () => {
+  const workspaceRoot = mkdtempSync(path.join(tmpdir(), "ai-assist-dogfood-hash-"));
+  const runtimeRoot = path.join(workspaceRoot, "ai-assist-infra/docker/dogfood-runtime");
+  mkdirSync(path.join(runtimeRoot, "ai_assist_dogfood_runtime"), { recursive: true });
+  writeFileSync(path.join(runtimeRoot, "Dockerfile"), "FROM python:3.13\n");
+  writeFileSync(path.join(runtimeRoot, "ai_assist_dogfood_runtime/http_app.py"), "def handle_http_request(): pass\n");
+
+  for (const asset of PYTHON_SERVICE_CONTAINER_ASSETS) {
+    const serviceRoot = path.join(workspaceRoot, asset.sourceDirectory);
+    mkdirSync(path.join(serviceRoot, "src", asset.pythonPackage), { recursive: true });
+    writeFileSync(path.join(serviceRoot, "pyproject.toml"), `[project]\nname = "${asset.sourceDirectory}"\n`);
+    writeFileSync(path.join(serviceRoot, "src", asset.pythonPackage, "__init__.py"), "\n");
+  }
+
+  const before = buildDogfoodRuntimeSourceHash(workspaceRoot, runtimeRoot);
+  const targetAsset = PYTHON_SERVICE_CONTAINER_ASSETS.find((asset) => asset.service === SERVICES.ORCHESTRATION);
+  assert.ok(targetAsset);
+  writeFileSync(path.join(workspaceRoot, targetAsset.sourceDirectory, "src", targetAsset.pythonPackage, "http_app.py"), "def handle_http_request(): return {}\n");
+  const afterServiceChange = buildDogfoodRuntimeSourceHash(workspaceRoot, runtimeRoot);
+  assert.notEqual(afterServiceChange, before);
+
+  mkdirSync(path.join(workspaceRoot, targetAsset.sourceDirectory, "src", targetAsset.pythonPackage, "__pycache__"), { recursive: true });
+  writeFileSync(path.join(workspaceRoot, targetAsset.sourceDirectory, "src", targetAsset.pythonPackage, "__pycache__", "http_app.cpython-313.pyc"), "ignored");
+  assert.equal(buildDogfoodRuntimeSourceHash(workspaceRoot, runtimeRoot), afterServiceChange);
+});
+
 test("dogfood runtime dispatcher imports and handles the SSE route", () => {
   const script = [
     "import ai_assist_dogfood_runtime.http_app as app",
@@ -107,6 +135,28 @@ test("dogfood runtime dispatcher imports and handles the SSE route", () => {
     "assert response['status'] == 200, response",
     "assert response['headers']['Content-Type'] == 'text/event-stream', response",
     "assert b'dogfood runtime sse path ready' in response['body'], response"
+  ].join("; ");
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime dispatcher normalizes lambda-style package responses", () => {
+  const script = [
+    "import json",
+    "import ai_assist_dogfood_runtime.http_app as app",
+    "response = app.normalize_package_response({'statusCode': 418, 'headers': {'X-Test': 'yes'}, 'body': {'error': {'code': 'TEAPOT'}}})",
+    "assert response['status'] == 418, response",
+    "assert response['headers']['Content-Type'] == 'application/json', response",
+    "assert response['headers']['X-Test'] == 'yes', response",
+    "assert json.loads(response['body'].decode('utf-8'))['error']['code'] == 'TEAPOT', response"
   ].join("; ");
   const result = spawnSync("python3", ["-c", script], {
     cwd: process.cwd(),

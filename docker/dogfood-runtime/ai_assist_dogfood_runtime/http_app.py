@@ -74,7 +74,9 @@ def handle_http_request(
             dispatch.owning_service,
             path,
         )
-    return package_handler(method=method, path=path, headers=headers, query_string=query_string, body=body)
+    return normalize_package_response(
+        package_handler(method=method, path=path, headers=headers, query_string=query_string, body=body)
+    )
 
 
 def find_route(method: str, path: str) -> RouteDispatch | None:
@@ -103,6 +105,22 @@ def sse_ready_response(service: str) -> dict[str, Any]:
             "X-Accel-Buffering": "no",
         },
         "body": b": ai-assist dogfood runtime sse path ready\n\n",
+    }
+
+
+def normalize_package_response(response: dict[str, Any]) -> dict[str, Any]:
+    status = response.get("status", response.get("statusCode", 500))
+    headers = response.get("headers", {})
+    body = response.get("body", b"")
+    if not isinstance(headers, dict):
+        headers = {}
+    if isinstance(body, (dict, list)):
+        headers = {"Content-Type": "application/json", **headers}
+        body = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return {
+        "status": status,
+        "headers": headers,
+        "body": body,
     }
 
 

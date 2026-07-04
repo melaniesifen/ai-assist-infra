@@ -57,14 +57,15 @@ or when service-owned runtime isolation becomes more important than dev cost.
 
 ## Deployment Targets
 
-The CDK app synthesizes exactly three initial targets from
-`src/config/environments.ts`:
+The CDK app synthesizes three initial runtime targets from
+`src/config/environments.ts`. Each runtime stack also has a companion
+`us-east-1` certificate stack for the CloudFront web alias:
 
-| Target | Region | Account Source | Stack | Default Removal Posture |
-| --- | --- | --- | --- | --- |
-| `dev` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistDevInfraStack` | cleanup-friendly |
-| `gamma` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistGammaInfraStack` | retain/protect |
-| `prod` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistProdInfraStack` | retain/protect |
+| Target | Region | Account Source | Runtime Stack | Web Certificate Stack | Default Removal Posture |
+| --- | --- | --- | --- | --- | --- |
+| `dev` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistDevInfraStack` | `AiAssistDevWebCertificateStack` | cleanup-friendly |
+| `gamma` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistGammaInfraStack` | `AiAssistGammaWebCertificateStack` | retain/protect |
+| `prod` | `us-west-2` | `CDK_DEFAULT_ACCOUNT` | `AiAssistProdInfraStack` | `AiAssistProdWebCertificateStack` | retain/protect |
 
 `stage` and `staging` are accepted as aliases for `gamma`. Add later stages or
 regions by editing the typed target list, not by copying stack code. Deployable
@@ -275,11 +276,12 @@ Example local context shape:
 ```
 
 After local context is populated, the deploy command does not need service image
-URI, auth, or certificate parameters:
+URI, auth, or certificate parameters. Deploy the target's web certificate stack
+with the runtime stack so CloudFront receives a valid `us-east-1` certificate:
 
 ```sh
 npm run build
-npx cdk deploy AiAssistDevInfraStack
+npx cdk deploy AiAssistDevWebCertificateStack AiAssistDevInfraStack
 ```
 
 ## Static Web App Hosting
@@ -291,7 +293,7 @@ For each deployment target, the stack creates:
 - a CloudFront distribution with origin access control, HTTPS redirect, security
   response headers, SPA fallback to `/index.html`, and the host from
   `WebAppBaseUrl`
-- an ACM certificate in `us-east-1` for the CloudFront alias
+- a companion ACM certificate stack in `us-east-1` for the CloudFront alias
 - a Route 53 `A` alias record for the `WebAppBaseUrl` host
 - outputs for `WebAppBaseUrl`, `WebAppAssetsBucketName`, and
   `WebAppDistributionId`

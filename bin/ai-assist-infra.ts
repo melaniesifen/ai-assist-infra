@@ -3,6 +3,9 @@ import * as cdk from "aws-cdk-lib";
 import { DEPLOYMENT_CONFIG_CONTEXT_KEY, parseDeploymentConfigContext } from "../src/config/deployment-config";
 import { listDeploymentTargets } from "../src/config/environments";
 import { AiAssistInfraStack } from "../src/stacks/ai-assist-infra-stack";
+import { AiAssistWebCertificateStack } from "../src/stacks/ai-assist-web-certificate-stack";
+
+const CLOUDFRONT_CERTIFICATE_REGION = "us-east-1";
 
 const app = new cdk.App();
 const targets = listDeploymentTargets();
@@ -17,13 +20,30 @@ for (const target of targets) {
 for (const target of targets) {
   const account = process.env[target.accountEnvVar] ?? target.fallbackAccount;
   const deploymentConfig = parseDeploymentConfigContext(app.node.tryGetContext(DEPLOYMENT_CONFIG_CONTEXT_KEY), target.environmentName);
-  new AiAssistInfraStack(app, target.stackName, {
+  const certificateStack = new AiAssistWebCertificateStack(app, webCertificateStackName(target.stackName), {
     deploymentTarget: target,
     deploymentConfig,
+    crossRegionReferences: true,
+    env: {
+      account,
+      region: CLOUDFRONT_CERTIFICATE_REGION
+    },
+    stackName: webCertificateStackName(target.stackName)
+  });
+  const infraStack = new AiAssistInfraStack(app, target.stackName, {
+    deploymentTarget: target,
+    deploymentConfig,
+    webAppCertificate: certificateStack.certificate,
+    crossRegionReferences: true,
     env: {
       account,
       region: target.region
     },
     stackName: target.stackName
   });
+  infraStack.addDependency(certificateStack);
+}
+
+function webCertificateStackName(infraStackName: string): string {
+  return infraStackName.replace(/InfraStack$/, "WebCertificateStack");
 }

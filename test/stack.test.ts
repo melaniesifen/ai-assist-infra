@@ -1,5 +1,6 @@
 import * as cdk from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DeploymentTarget, listDeploymentTargets } from "../src/config/environments";
@@ -8,6 +9,7 @@ import { listKmsPurposeMappings } from "../src/config/kms-purposes";
 import { OPERATIONAL_ALARMS } from "../src/config/operational-guardrails";
 import { SERVICE_ROUTES } from "../src/config/service-routes";
 import { AiAssistInfraStack } from "../src/stacks/ai-assist-infra-stack";
+import { AiAssistWebCertificateStack } from "../src/stacks/ai-assist-web-certificate-stack";
 
 const TEST_DEPLOYMENT_CONFIG = {
   hostedZoneId: "Z1234567890ABC",
@@ -35,6 +37,7 @@ function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): T
   const stack = new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
     deploymentConfig: TEST_DEPLOYMENT_CONFIG,
+    webAppCertificate: testWebAppCertificate(app, target),
     stackName: target.stackName,
     env: {
       account: "111111111111",
@@ -49,6 +52,7 @@ function synthTemplateWithDeploymentConfig(deploymentConfig: typeof TEST_DEPLOYM
   const stack = new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
     deploymentConfig,
+    webAppCertificate: testWebAppCertificate(app, target),
     stackName: target.stackName,
     env: {
       account: "111111111111",
@@ -63,12 +67,27 @@ function synthStack(target: DeploymentTarget): cdk.Stack {
   return new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
     deploymentConfig: TEST_DEPLOYMENT_CONFIG,
+    webAppCertificate: testWebAppCertificate(app, target),
     stackName: target.stackName,
     env: {
       account: "111111111111",
       region: target.region
     }
   });
+}
+
+function testWebAppCertificate(app: cdk.App, target: DeploymentTarget): acm.ICertificate {
+  const certificateHolder = new cdk.Stack(app, `${target.stackName}CertificateTestHolder`, {
+    env: {
+      account: "111111111111",
+      region: "us-east-1"
+    }
+  });
+  return acm.Certificate.fromCertificateArn(
+    certificateHolder,
+    "ImportedWebAppCertificate",
+    "arn:aws:acm:us-east-1:111111111111:certificate/test-web-app-certificate"
+  );
 }
 
 test("synthesizes distinct dev gamma and prod deployment targets", () => {
@@ -111,6 +130,37 @@ test("synthesizes distinct dev gamma and prod deployment targets", () => {
   });
   assert.equal(JSON.stringify(gammaTemplate.toJSON()).includes("ai-assist-gamma-us-west-2-dogfood-runtime"), false);
   assert.equal(JSON.stringify(prodTemplate.toJSON()).includes("ai-assist-prod-us-west-2-dogfood-runtime"), false);
+});
+
+test("synthesizes CloudFront web app certificates in us-east-1 without deprecated validation helpers", () => {
+  const target = listDeploymentTargets()[0];
+  const app = new cdk.App();
+  const stack = new AiAssistWebCertificateStack(app, "AiAssistDevWebCertificateStack", {
+    deploymentTarget: target,
+    deploymentConfig: TEST_DEPLOYMENT_CONFIG,
+    env: {
+      account: "111111111111",
+      region: "us-east-1"
+    }
+  });
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties("AWS::CertificateManager::Certificate", {
+    DomainName: "app.dev.example.test",
+    DomainValidationOptions: Match.arrayWith([
+      Match.objectLike({
+        DomainName: "app.dev.example.test",
+        HostedZoneId: "Z1234567890ABC"
+      })
+    ]),
+    ValidationMethod: "DNS"
+  });
+  template.resourceCountIs("Custom::AWS", 0);
+  template.hasOutput("WebAppCertificateArn", {
+    Value: {
+      Ref: Match.stringLikeRegexp("WebAppCertificate")
+    }
+  });
 });
 
 test("synthesizes DynamoDB tables from the canonical table specs", () => {
@@ -257,6 +307,16 @@ test("can disable API Gateway edge JWT only for dev infra health deploys", () =>
     AuthorizationType: "NONE",
     Target: Match.anyValue()
   });
+  template.hasResourceProperties("AWS::ApiGatewayV2::Integration", {
+    IntegrationType: "HTTP_PROXY",
+    RequestParameters: Match.objectLike({
+      "overwrite:header.x-request-id": "$context.requestId",
+      "overwrite:header.x-correlation-id": "$context.requestId"
+    })
+  });
+  const templateJson = template.toJSON();
+  assert.equal(JSON.stringify(templateJson).includes("$context.authorizer.jwt.claims.tenant_id"), false);
+  assert.equal(JSON.stringify(templateJson).includes("$context.authorizer.jwt.claims.user_id"), false);
 });
 
 test("synthesizes one shared Fargate runtime with private API ALB and public SSE ALB", () => {
@@ -563,11 +623,6 @@ test("synthesizes static web app hosting and DNS from WebAppBaseUrl", () => {
         })
       ])
     })
-  });
-  template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
-    DomainName: "app.dev.example.test",
-    Region: "us-east-1",
-    HostedZoneId: "Z1234567890ABC"
   });
   template.hasResourceProperties("AWS::Route53::RecordSet", {
     Name: "app.dev.example.test.",

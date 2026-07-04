@@ -21,6 +21,7 @@ import { Construct } from "constructs";
 import * as path from "node:path";
 import { PYTHON_SERVICE_BASE_IMAGE, PYTHON_SERVICE_CONTAINER_ASSETS } from "../config/container-assets";
 import { DEPLOYMENT_CONFIG_CONTEXT_KEY, TargetDeploymentConfig, getWebAppDomainName, parseDeploymentConfigContext } from "../config/deployment-config";
+import { buildDogfoodRuntimeSourceHash } from "../config/dogfood-runtime-source-hash";
 import { DynamoDbTableSpec, listDynamoDbTableSpecs } from "../config/dynamodb-tables";
 import { DeploymentTarget, ENVIRONMENTS, buildTargetResourceName, isProductionEnvironment, normalizeEnvironmentName } from "../config/environments";
 import { DYNAMODB_ACCESS_LEVELS, IAM_BOUNDARY_MATRIX, KMS_ACCESS_LEVELS } from "../config/iam-boundaries";
@@ -33,7 +34,6 @@ const SERVICE_CONTAINER_PORT = 8080;
 const SSE_IDLE_TIMEOUT_SECONDS = 900;
 const DEFAULT_SSE_HEARTBEAT_SECONDS = 25;
 const DEFAULT_SSE_REPLAY_WINDOW_SECONDS = 300;
-const CLOUDFRONT_CERTIFICATE_REGION = "us-east-1";
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../../..");
 const PYTHON_SERVICE_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/python-service");
 const DOGFOOD_RUNTIME_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/dogfood-runtime");
@@ -44,6 +44,7 @@ export interface AiAssistInfraStackProps extends cdk.StackProps {
   readonly environmentName?: string;
   readonly deploymentTarget?: DeploymentTarget;
   readonly deploymentConfig?: TargetDeploymentConfig;
+  readonly webAppCertificate?: acm.ICertificate;
 }
 
 interface ServiceRuntimeInfrastructure {
@@ -77,13 +78,16 @@ export class AiAssistInfraStack extends cdk.Stack {
       logRetentionDays: isProductionEnvironment(props.environmentName ?? ENVIRONMENTS.DEV) ? 365 : 30
     };
     const deploymentConfig = props.deploymentConfig ?? parseDeploymentConfigContext(this.node.tryGetContext(DEPLOYMENT_CONFIG_CONTEXT_KEY), deploymentTarget.environmentName);
+    if (!props.webAppCertificate) {
+      throw new Error("webAppCertificate is required for CloudFront static web app hosting");
+    }
     const environmentName = normalizeEnvironmentName(deploymentTarget.environmentName);
     const keys = this.createKmsKeys(deploymentTarget);
     const tables = this.createDynamoDbTables(deploymentTarget, keys);
     const secrets = this.createRuntimeSecrets(deploymentTarget);
     const serviceRoles = this.createServiceRoles(tables, keys);
     const api = this.createHttpApi(deploymentTarget);
-    const webAppHosting = this.createWebAppHosting(deploymentTarget, deploymentConfig);
+    const webAppHosting = this.createWebAppHosting(deploymentTarget, deploymentConfig, props.webAppCertificate);
     const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, api.attrApiEndpoint, deploymentConfig);
     this.createHttpRouteInventory(api, deploymentTarget, runtime, deploymentConfig);
     this.createOperationalAlarms(deploymentTarget);
@@ -117,7 +121,8 @@ export class AiAssistInfraStack extends cdk.Stack {
 
   private createWebAppHosting(
     deploymentTarget: DeploymentTarget,
-    deploymentConfig: TargetDeploymentConfig
+    deploymentConfig: TargetDeploymentConfig,
+    certificate: acm.ICertificate
   ): { readonly assetsBucket: s3.Bucket; readonly distribution: cloudfront.Distribution } {
     const webAppDomainName = getWebAppDomainName(deploymentConfig.webAppBaseUrl);
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, "WebAppHostedZone", {
@@ -131,11 +136,6 @@ export class AiAssistInfraStack extends cdk.Stack {
       enforceSSL: true,
       versioned: true,
       removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
-    });
-    const certificate = new acm.DnsValidatedCertificate(this, "WebAppCertificate", {
-      domainName: webAppDomainName,
-      hostedZone,
-      region: CLOUDFRONT_CERTIFICATE_REGION
     });
     const distribution = new cloudfront.Distribution(this, "WebAppDistribution", {
       comment: `AI Assist ${deploymentTarget.environmentName} static web app hosting.`,
@@ -349,7 +349,7 @@ export class AiAssistInfraStack extends cdk.Stack {
     for (const route of SERVICE_ROUTES.filter((candidate) => candidate.edgeSurface === "api-gateway")) {
       const targetIntegration = route.intentionallyPlaceholder
         ? placeholderIntegration
-        : this.createHttpServiceIntegration(api, runtime.vpcLink, runtime.sharedHttpListener, route);
+        : this.createHttpServiceIntegration(api, runtime.vpcLink, runtime.sharedHttpListener, route, deploymentConfig.edgeJwtAuthEnabled);
       const routeResource = new apigatewayv2.CfnRoute(this, routeConstructId(route.routeKey), {
         apiId: api.ref,
         routeKey: route.routeKey,
@@ -398,7 +398,8 @@ export class AiAssistInfraStack extends cdk.Stack {
     api: apigatewayv2.CfnApi,
     vpcLink: apigatewayv2.CfnVpcLink,
     listener: elbv2.ApplicationListener,
-    route: { readonly routeKey: string; readonly method: string; readonly path: string; readonly service: ServiceName; readonly requiresAuthentication: boolean }
+    route: { readonly routeKey: string; readonly method: string; readonly path: string; readonly service: ServiceName; readonly requiresAuthentication: boolean },
+    edgeJwtAuthEnabled: boolean
   ): apigatewayv2.CfnIntegration {
     return new apigatewayv2.CfnIntegration(this, `${routeConstructId(route.routeKey)}Integration`, {
       apiId: api.ref,
@@ -409,7 +410,7 @@ export class AiAssistInfraStack extends cdk.Stack {
       connectionId: vpcLink.ref,
       payloadFormatVersion: "1.0",
       description: `Shared dogfood runtime ALB integration for ${route.service}.`,
-      requestParameters: integrationRequestParameters(route)
+      requestParameters: integrationRequestParameters(route, edgeJwtAuthEnabled)
     });
   }
 
@@ -670,6 +671,7 @@ exports.handler = async (event) => {
           PYTHON_BASE_IMAGE: PYTHON_SERVICE_BASE_IMAGE
         },
         buildContexts: dogfoodRuntimeBuildContexts(),
+        extraHash: buildDogfoodRuntimeSourceHash(WORKSPACE_ROOT, DOGFOOD_RUNTIME_DOCKER_CONTEXT),
         platform: SERVICE_CONTAINER_IMAGE_PLATFORM
       })
     );
@@ -899,13 +901,13 @@ function formatRouteOwnershipEnvironment(): string {
   return SERVICE_ROUTES.map((route) => `${route.method} ${route.path}=${route.service}`).join(",");
 }
 
-function integrationRequestParameters(route: { readonly requiresAuthentication: boolean }): Record<string, string> {
+function integrationRequestParameters(route: { readonly requiresAuthentication: boolean }, edgeJwtAuthEnabled: boolean): Record<string, string> {
   const parameters: Record<string, string> = {
     "overwrite:header.x-request-id": "$context.requestId",
     "overwrite:header.x-correlation-id": "$context.requestId"
   };
 
-  if (route.requiresAuthentication) {
+  if (route.requiresAuthentication && edgeJwtAuthEnabled) {
     parameters["overwrite:header.x-ai-assist-tenant-id"] = "$context.authorizer.jwt.claims.tenant_id";
     parameters["overwrite:header.x-ai-assist-user-id"] = "$context.authorizer.jwt.claims.user_id";
   }
