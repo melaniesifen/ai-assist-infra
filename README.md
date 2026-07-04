@@ -154,6 +154,7 @@ SseDomainName
 EdgeJwtAuthEnabled
 ProductAuthIssuer
 ProductAuthAudience
+TrustedUserTenantId
 ```
 
 `ProductAuthAudience` is also injected into the shared dogfood runtime as
@@ -165,6 +166,9 @@ Manager secret and injected into the dogfood ECS task as an ECS secret. Do not
 place the HMAC value in `cdk.context.json`, `.env`, or shell command history.
 `OAUTH_STATE_SIGNING_SECRET` follows the same generated-secret pattern for
 Google OAuth state signing.
+`TrustedUserTenantId` is injected as `TRUSTED_USER_TENANT_ID`; it is not a
+secret, but it should be stable for a target so issued sessions and stored
+tenant-scoped records agree on the same tenant identifier.
 
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses
@@ -203,7 +207,8 @@ Example local context shape:
       "sseDomainName": "sse.dev.example.test",
       "edgeJwtAuthEnabled": false,
       "productAuthIssuer": "https://auth.dev.example.test/",
-      "productAuthAudience": "ai-assist-dev"
+      "productAuthAudience": "ai-assist-dev",
+      "trustedUserTenantId": "dev-tenant"
     }
   }
 }

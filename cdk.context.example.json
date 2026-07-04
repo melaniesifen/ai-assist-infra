@@ -6,7 +6,8 @@
       "sseDomainName": "sse.dev.example.test",
       "edgeJwtAuthEnabled": false,
       "productAuthIssuer": "https://auth.dev.example.test/",
-      "productAuthAudience": "ai-assist-dev"
+      "productAuthAudience": "ai-assist-dev",
+      "trustedUserTenantId": "dev-tenant"
     },
     "gamma": {
       "hostedZoneId": "Z1234567890ABC",
@@ -14,7 +15,8 @@
       "sseDomainName": "sse.gamma.example.test",
       "edgeJwtAuthEnabled": true,
       "productAuthIssuer": "https://auth.gamma.example.test/",
-      "productAuthAudience": "ai-assist-gamma"
+      "productAuthAudience": "ai-assist-gamma",
+      "trustedUserTenantId": "gamma-tenant"
     },
     "prod": {
       "hostedZoneId": "Z1234567890ABC",
@@ -22,7 +24,8 @@
       "sseDomainName": "sse.example.test",
       "edgeJwtAuthEnabled": true,
       "productAuthIssuer": "https://auth.example.test/",
-      "productAuthAudience": "ai-assist-prod"
+      "productAuthAudience": "ai-assist-prod",
+      "trustedUserTenantId": "prod-tenant"
     }
   }
 }

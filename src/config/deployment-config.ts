@@ -8,6 +8,7 @@ export interface TargetDeploymentConfig {
   readonly sseDomainName: string;
   readonly productAuthIssuer: string;
   readonly productAuthAudience: string;
+  readonly trustedUserTenantId: string;
   readonly edgeJwtAuthEnabled: boolean;
 }
 
@@ -34,6 +35,7 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const edgeJwtAuthEnabled = value.edgeJwtAuthEnabled !== undefined ? requireBoolean(value.edgeJwtAuthEnabled, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled`) : true;
   const productAuthIssuer = edgeJwtAuthEnabled ? requireString(value.productAuthIssuer, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthIssuer`) : optionalString(value.productAuthIssuer);
   const productAuthAudience = requireString(value.productAuthAudience, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.productAuthAudience`);
+  const trustedUserTenantId = requireString(value.trustedUserTenantId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserTenantId`);
 
   if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneId must be a Route 53 hosted zone id`);
@@ -64,6 +66,7 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
     sseDomainName,
     productAuthIssuer,
     productAuthAudience,
+    trustedUserTenantId,
     edgeJwtAuthEnabled
   };
 }

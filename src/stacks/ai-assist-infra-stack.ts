@@ -550,6 +550,7 @@ exports.handler = async (event) => {
       APP_ENV: deploymentTarget.environmentName,
       AWS_REGION: deploymentTarget.region,
       TRUSTED_USER_MODE: "true",
+      TRUSTED_USER_TENANT_ID: deploymentConfig.trustedUserTenantId,
       PRODUCT_AUTH_AUDIENCE: deploymentConfig.productAuthAudience,
       APP_KMS_KEY_ID: keys[KMS_PURPOSES.OAUTH_TOKENS].keyArn,
       TENANT_TABLE_NAME: tableName("Tenants"),
