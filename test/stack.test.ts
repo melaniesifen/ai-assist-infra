@@ -246,6 +246,7 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
   template.resourceCountIs("AWS::ECS::Cluster", 1);
   template.resourceCountIs("AWS::ECS::Service", 1);
   template.resourceCountIs("AWS::ECS::TaskDefinition", 1);
+  template.resourceCountIs("AWS::SecretsManager::Secret", 1);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::Listener", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::ListenerRule", 1);
@@ -354,9 +355,21 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
             Name: "ROUTE_OWNING_SERVICES",
             Value: Match.stringLikeRegexp("POST /auth/login=ai-assist-auth-service")
           }
+        ]),
+        Secrets: Match.arrayWith([
+          Match.objectLike({
+            Name: "PRODUCT_AUTH_HMAC_SECRET"
+          })
         ])
       })
     ])
+  });
+  template.hasResourceProperties("AWS::SecretsManager::Secret", {
+    Name: "ai-assist-dev-us-west-2-product-auth-hmac-secret",
+    GenerateSecretString: {
+      PasswordLength: 48,
+      ExcludePunctuation: true
+    }
   });
   template.hasResourceProperties("AWS::Logs::LogGroup", {
     LogGroupName: "/aws/ecs/ai-assist-dev-us-west-2-dogfood-runtime",

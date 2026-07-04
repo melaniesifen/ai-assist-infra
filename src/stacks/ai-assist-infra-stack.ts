@@ -13,6 +13,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 import * as path from "node:path";
 import { PYTHON_SERVICE_BASE_IMAGE, PYTHON_SERVICE_CONTAINER_ASSETS } from "../config/container-assets";
@@ -67,8 +68,9 @@ export class AiAssistInfraStack extends cdk.Stack {
     const environmentName = normalizeEnvironmentName(deploymentTarget.environmentName);
     const keys = this.createKmsKeys(deploymentTarget);
     const tables = this.createDynamoDbTables(deploymentTarget, keys);
+    const secrets = this.createRuntimeSecrets(deploymentTarget);
     const serviceRoles = this.createServiceRoles(tables, keys);
-    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, deploymentConfig);
+    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, deploymentConfig);
     const api = this.createHttpRouteInventory(deploymentTarget, runtime, deploymentConfig);
     this.createOperationalAlarms(deploymentTarget);
 
@@ -147,6 +149,20 @@ export class AiAssistInfraStack extends cdk.Stack {
       tables[spec.name] = table;
     }
     return tables;
+  }
+
+  private createRuntimeSecrets(deploymentTarget: DeploymentTarget): Record<"productAuthHmac", secretsmanager.Secret> {
+    return {
+      productAuthHmac: new secretsmanager.Secret(this, "ProductAuthHmacSecret", {
+        secretName: buildTargetResourceName(deploymentTarget, "product-auth-hmac-secret"),
+        description: "Generated HMAC signing secret for dogfood product-session tokens.",
+        generateSecretString: {
+          passwordLength: 48,
+          excludePunctuation: true
+        },
+        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+      })
+    };
   }
 
   private createHttpRouteInventory(deploymentTarget: DeploymentTarget, runtime: ServiceRuntimeInfrastructure, deploymentConfig: TargetDeploymentConfig): apigatewayv2.CfnApi {
@@ -293,6 +309,7 @@ exports.handler = async (event) => {
     deploymentTarget: DeploymentTarget,
     tables: Record<string, dynamodb.Table>,
     keys: Record<KmsPurpose, kms.Key>,
+    secrets: Record<"productAuthHmac", secretsmanager.Secret>,
     deploymentConfig: TargetDeploymentConfig
   ): ServiceRuntimeInfrastructure {
     const vpc = new ec2.Vpc(this, "ServiceVpc", {
@@ -322,7 +339,7 @@ exports.handler = async (event) => {
     });
     const sharedEnvironment = this.buildSharedServiceEnvironment(deploymentTarget, tables, keys, deploymentConfig);
     const dogfoodRuntimeRole = this.createDogfoodRuntimeRole(tables, keys);
-    const runtime = this.createDogfoodRuntimeService(deploymentTarget, vpc, cluster, dogfoodRuntimeRole, sharedEnvironment, vpcLinkSecurityGroup, deploymentConfig);
+    const runtime = this.createDogfoodRuntimeService(deploymentTarget, vpc, cluster, dogfoodRuntimeRole, sharedEnvironment, secrets, vpcLinkSecurityGroup, deploymentConfig);
 
     return {
       vpcLink,
@@ -336,6 +353,7 @@ exports.handler = async (event) => {
     cluster: ecs.Cluster,
     taskRole: iam.Role,
     sharedEnvironment: Record<string, string>,
+    secrets: Record<"productAuthHmac", secretsmanager.Secret>,
     vpcLinkSecurityGroup: ec2.SecurityGroup,
     deploymentConfig: TargetDeploymentConfig
   ): { readonly service: ecs.FargateService; readonly httpListener: elbv2.ApplicationListener; readonly httpsListener: elbv2.ApplicationListener; readonly publicLoadBalancer: elbv2.ApplicationLoadBalancer; readonly privateLoadBalancer: elbv2.ApplicationLoadBalancer } {
@@ -367,6 +385,9 @@ exports.handler = async (event) => {
         SERVICE_PORT: String(SERVICE_CONTAINER_PORT),
         ROUTE_OWNING_SERVICES: formatRouteOwnershipEnvironment()
       },
+      secrets: {
+        PRODUCT_AUTH_HMAC_SECRET: ecs.Secret.fromSecretsManager(secrets.productAuthHmac)
+      },
       healthCheck: {
         command: ["CMD-SHELL", `python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:${SERVICE_CONTAINER_PORT}/health', timeout=2)\nPY`],
         interval: cdk.Duration.seconds(30),
@@ -375,6 +396,7 @@ exports.handler = async (event) => {
         startPeriod: cdk.Duration.seconds(30)
       }
     });
+    secrets.productAuthHmac.grantRead(taskDefinition.executionRole!);
     container.addPortMappings({
       containerPort: SERVICE_CONTAINER_PORT
     });
