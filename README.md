@@ -10,7 +10,7 @@ DynamoDB, KMS, IAM boundary, and rate-limit contracts.
 ## Current Contents
 
 - `bin/ai-assist-infra.ts`: CDK app entry point.
-- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP route integrations, CDK-built Fargate service image assets, public ALB SSE hosting, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
+- `src/stacks/ai-assist-infra-stack.ts`: MVP stack with HTTP route integrations, a shared CDK-built dogfood Fargate runtime, shared public ALB hosting for API Gateway VPC link traffic and SSE, DynamoDB tables, one shared app KMS key per target, IAM roles, and default API throttling.
 - `docker/python-service/`: shared Python service image build context. The image
   installs and compiles the selected service package, serves a metadata-only
   `/health` endpoint, and delegates product routes to a service-provided
@@ -26,9 +26,10 @@ The current CDK app creates:
 
 - One shared customer-managed KMS app key and alias per deployment target for OAuth tokens, session secrets, proposed actions, and future user secrets.
 - DynamoDB tables for tenants, users, OAuth tokens, session secrets, consent grants, resource sessions, proposed actions, and optional session event replay metadata.
-- HTTP API command routes with JWT authorizer wiring and private ALB integrations to ECS/Fargate service runtimes.
-- Public HTTPS ALB hosting for browser `EventSource` SSE streams to the session-events runtime.
+- HTTP API command routes with JWT authorizer wiring and VPC link integrations to one shared dogfood ECS/Fargate runtime.
+- Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same load balancer and runtime path.
 - Service IAM roles with table and KMS grants derived from the IAM boundary matrix.
+- A shared dogfood runtime task role with the union of current MVP service data-plane grants; per-service IAM roles remain synthesized for ownership boundaries and future runtime split-out.
 - Default API Gateway throttling based on the route rate-limit tiers.
 
 The only intentionally placeholder-backed route is `GET /health`. Trusted-user
@@ -39,6 +40,12 @@ can use long-lived responses.
 This repo owns infrastructure shape, not application business logic. Service
 repos remain responsible for safe logging, authentication checks, context
 authorization, and secret-free responses.
+
+The shared dogfood runtime role is a deliberate cost-control exception for this
+single-task topology. It keeps service-owned IAM roles synthesized as boundary
+documentation and future split-out targets, but the deployed dogfood task uses a
+union of current MVP service data-plane grants. Revisit this before broad access
+or when service-owned runtime isolation becomes more important than dev cost.
 
 ## Deployment Targets
 
@@ -83,8 +90,10 @@ The typed route inventory covers:
 - apply-action: `POST /resource-sessions/{sessionId}/apply-action`
 
 HTTP command routes synthesize with API Gateway JWT authorization, VPC link
-integrations, request/correlation ID header propagation, and private ALB
-listeners per owning service. The only API Gateway product-route edge auth
+integrations, request/correlation ID header propagation, and one shared ALB
+HTTP listener. Authenticated integrations overwrite trusted tenant and user
+headers from validated JWT claims (`tenant_id` and `user_id`) before forwarding
+to the runtime. Route metadata still records the owning service. The only API Gateway product-route edge auth
 exceptions are `POST /auth/login` and `GET /oauth/google/callback`: login is
 the trusted-user bootstrap boundary, and the Google callback cannot carry the
 browser's bearer token from Google's redirect. The auth service must validate
@@ -99,21 +108,25 @@ match the bearer tokens used by trusted users. This repo only wires the edge
 authorizer. Owning service repos still own command behavior, service-side
 authZ, session validation, SSE event payloads, and action state transitions.
 
-The public SSE ALB uses HTTPS, a 900 second idle timeout, session-events
-Fargate tasks, service logs, health checks, and generic SSE config:
+The public SSE path uses the shared public ALB HTTPS listener, a 900 second idle
+timeout, shared dogfood runtime service logs, health checks, and generic SSE config:
 `SSE_HEARTBEAT_SECONDS=25` and `SSE_REPLAY_WINDOW_SECONDS=300`.
 
 ## Service Image Assets
 
-Service runtime images are CDK Docker image assets, not manually supplied image
-URI parameters. `cdk deploy` builds and publishes the service images through the
-CDK asset pipeline from the workspace source tree using
-`docker/python-service/Dockerfile`.
+Runtime images are CDK Docker image assets, not manually supplied image URI
+parameters. `cdk deploy` builds and publishes images through the CDK asset
+pipeline from the workspace source tree.
 
 Current service image inputs are defined in `src/config/container-assets.ts`.
-The shared image uses `python:3.13-slim-bookworm`, never `latest`, compiles the
-service source during image build, runs as UID/GID `65534`, and exposes
-`SERVICE_PORT=8080`.
+The dogfood runtime image uses `docker/dogfood-runtime/Dockerfile`, installs all
+current MVP service packages from their workspace repos, and exposes the
+`ai_assist_dogfood_runtime.http_app` dispatcher as the container HTTP adapter.
+The dispatcher maps method/path to the owning service package, delegates to a
+package `http_app.handle_http_request` when present, and returns explicit safe
+fallbacks for packages whose route adapters are not implemented yet. The image
+uses `python:3.13-slim-bookworm`, never `latest`, compiles source during image
+build, runs as UID/GID `65534`, and exposes `SERVICE_PORT=8080`.
 
 This removes the old deploy-time parameters:
 
@@ -243,7 +256,7 @@ Deployment order for a real-flow environment:
 
 1. Validate shared contracts and service route expectations.
 2. Deploy or synth infra tables, the shared KMS app key, HTTP route
-   integrations, SSE ALB, service runtimes, logs, metrics, and alarms.
+   integrations, shared ALB/runtime path, logs, metrics, and alarms.
 3. Start or deploy auth, secrets, context, Google Docs adapter, session events,
    orchestration, and provider adapter services with the config keys above.
 4. Run service repo checks and the deterministic integration harness.
@@ -273,6 +286,8 @@ The stack config includes:
   availability, provider token usage, Google Docs errors, SSE errors, apply
   conflicts, apply failures, KMS failures, DynamoDB throttling, and rate-limit
   decisions.
+- Dashboard and alarm resources are omitted in `dev` to keep the baseline
+  cheaper. `gamma` and `prod` synthesize the full dashboard and alarm guardrails.
 - Runbook notes for OAuth reconnect spikes, provider quota/unavailability,
   Google Docs connector errors, SSE failures, repeated apply conflicts, KMS
   failure, DynamoDB throttling, and rate-limit misconfiguration.

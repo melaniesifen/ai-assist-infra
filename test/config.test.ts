@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { PYTHON_SERVICE_BASE_IMAGE, PYTHON_SERVICE_CONTAINER_ASSETS, validateContainerAssetConfig } from "../src/config/container-assets";
 import { DEPLOYMENT_CONFIG_CONTEXT_KEY, parseDeploymentConfigContext } from "../src/config/deployment-config";
@@ -55,6 +57,37 @@ test("defines secure repeatable Python service container asset inputs", () => {
   assert.equal(PYTHON_SERVICE_BASE_IMAGE.includes(":latest"), false);
   assert.ok(PYTHON_SERVICE_CONTAINER_ASSETS.every((asset) => asset.sourceDirectory.startsWith("ai-assist-")));
   assert.ok(PYTHON_SERVICE_CONTAINER_ASSETS.some((asset) => asset.service === SERVICES.SESSION_EVENTS));
+});
+
+test("defines a dogfood runtime image that includes every service package", () => {
+  const dockerfile = readFileSync(path.join(process.cwd(), "docker/dogfood-runtime/Dockerfile"), "utf8");
+  const dispatcher = readFileSync(path.join(process.cwd(), "docker/dogfood-runtime/ai_assist_dogfood_runtime/http_app.py"), "utf8");
+  const sharedServer = readFileSync(path.join(process.cwd(), "docker/python-service/health_server.py"), "utf8");
+  const buildContextsByService = new Map([
+    [SERVICES.AUTH, "auth_service"],
+    [SERVICES.SECRETS, "secrets_service"],
+    [SERVICES.ORCHESTRATION, "orchestration_service"],
+    [SERVICES.SESSION_EVENTS, "session_events_service"],
+    [SERVICES.CONTEXT, "context_service"],
+    [SERVICES.GOOGLE_DOCS_ADAPTER, "google_docs_adapter"]
+  ]);
+
+  assert.match(dockerfile, /PYTHON_PACKAGE=ai_assist_dogfood_runtime/);
+  assert.match(dispatcher, /def handle_http_request/);
+  assert.match(dispatcher, /text\/event-stream/);
+  for (const asset of PYTHON_SERVICE_CONTAINER_ASSETS) {
+    const buildContext = buildContextsByService.get(asset.service);
+    assert.ok(buildContext, `${asset.service} must have a dogfood build context`);
+    assert.match(dockerfile, new RegExp(`COPY --from=${buildContext} pyproject\\.toml`));
+    assert.match(dockerfile, new RegExp(`COPY --from=${buildContext} src`));
+    assert.match(dispatcher, new RegExp(asset.pythonPackage));
+  }
+  for (const route of SERVICE_ROUTES.filter((candidate) => !candidate.intentionallyPlaceholder)) {
+    assert.match(dispatcher, new RegExp(route.service), `${route.routeKey} must preserve owning service metadata`);
+  }
+  for (const method of new Set(SERVICE_ROUTES.filter((candidate) => !candidate.intentionallyPlaceholder).map((route) => route.method))) {
+    assert.match(sharedServer, new RegExp(`def do_${method}\\(`), `shared Python server must handle ${method}`);
+  }
 });
 
 test("parses local deployment config from CDK context without exposing secrets", () => {

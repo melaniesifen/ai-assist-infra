@@ -15,7 +15,7 @@ import * as route53 from "aws-cdk-lib/aws-route53";
 import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
 import { Construct } from "constructs";
 import * as path from "node:path";
-import { PYTHON_SERVICE_BASE_IMAGE, getPythonServiceContainerAsset } from "../config/container-assets";
+import { PYTHON_SERVICE_BASE_IMAGE, PYTHON_SERVICE_CONTAINER_ASSETS } from "../config/container-assets";
 import { DEPLOYMENT_CONFIG_CONTEXT_KEY, TargetDeploymentConfig, parseDeploymentConfigContext } from "../config/deployment-config";
 import { DynamoDbTableSpec, listDynamoDbTableSpecs } from "../config/dynamodb-tables";
 import { DeploymentTarget, ENVIRONMENTS, buildTargetResourceName, isProductionEnvironment, normalizeEnvironmentName } from "../config/environments";
@@ -29,8 +29,10 @@ const SERVICE_CONTAINER_PORT = 8080;
 const SSE_IDLE_TIMEOUT_SECONDS = 900;
 const DEFAULT_SSE_HEARTBEAT_SECONDS = 25;
 const DEFAULT_SSE_REPLAY_WINDOW_SECONDS = 300;
+const DOGFOOD_RUNTIME_NAME = "dogfood-runtime";
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../../..");
 const PYTHON_SERVICE_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/python-service");
+const DOGFOOD_RUNTIME_DOCKER_CONTEXT = path.join(WORKSPACE_ROOT, "ai-assist-infra/docker/dogfood-runtime");
 const SERVICE_CONTAINER_CPU_ARCHITECTURE = ecs.CpuArchitecture.ARM64;
 const SERVICE_CONTAINER_IMAGE_PLATFORM = ecrAssets.Platform.LINUX_ARM64;
 
@@ -42,8 +44,7 @@ export interface AiAssistInfraStackProps extends cdk.StackProps {
 
 interface ServiceRuntimeInfrastructure {
   readonly vpcLink: apigatewayv2.CfnVpcLink;
-  readonly serviceListeners: Record<ServiceName, elbv2.ApplicationListener>;
-  readonly publicSseLoadBalancer: elbv2.ApplicationLoadBalancer;
+  readonly sharedHttpListener: elbv2.ApplicationListener;
 }
 
 export class AiAssistInfraStack extends cdk.Stack {
@@ -67,7 +68,7 @@ export class AiAssistInfraStack extends cdk.Stack {
     const keys = this.createKmsKeys(deploymentTarget);
     const tables = this.createDynamoDbTables(deploymentTarget, keys);
     const serviceRoles = this.createServiceRoles(tables, keys);
-    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, serviceRoles, deploymentConfig);
+    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, deploymentConfig);
     const api = this.createHttpRouteInventory(deploymentTarget, runtime, deploymentConfig);
     this.createOperationalAlarms(deploymentTarget);
 
@@ -152,7 +153,7 @@ export class AiAssistInfraStack extends cdk.Stack {
     const api = new apigatewayv2.CfnApi(this, "HttpApi", {
       name: buildTargetResourceName(deploymentTarget, "http-api"),
       protocolType: "HTTP",
-      description: "Trusted-user HTTP command routes wired to service runtimes for AI Assist."
+      description: "Trusted-user HTTP command routes wired to the shared dogfood runtime for AI Assist."
     });
     const authorizer = deploymentConfig.edgeJwtAuthEnabled
       ? new apigatewayv2.CfnAuthorizer(this, "ProductSessionJwtAuthorizer", {
@@ -194,7 +195,7 @@ export class AiAssistInfraStack extends cdk.Stack {
     for (const route of SERVICE_ROUTES.filter((candidate) => candidate.edgeSurface === "api-gateway")) {
       const targetIntegration = route.intentionallyPlaceholder
         ? placeholderIntegration
-        : this.createHttpServiceIntegration(api, runtime.vpcLink, runtime.serviceListeners[route.service], route);
+        : this.createHttpServiceIntegration(api, runtime.vpcLink, runtime.sharedHttpListener, route);
       const routeResource = new apigatewayv2.CfnRoute(this, routeConstructId(route.routeKey), {
         apiId: api.ref,
         routeKey: route.routeKey,
@@ -244,7 +245,7 @@ export class AiAssistInfraStack extends cdk.Stack {
     api: apigatewayv2.CfnApi,
     vpcLink: apigatewayv2.CfnVpcLink,
     listener: elbv2.ApplicationListener,
-    route: { readonly routeKey: string; readonly method: string; readonly path: string; readonly service: ServiceName }
+    route: { readonly routeKey: string; readonly method: string; readonly path: string; readonly service: ServiceName; readonly requiresAuthentication: boolean }
   ): apigatewayv2.CfnIntegration {
     return new apigatewayv2.CfnIntegration(this, `${routeConstructId(route.routeKey)}Integration`, {
       apiId: api.ref,
@@ -254,11 +255,8 @@ export class AiAssistInfraStack extends cdk.Stack {
       connectionType: "VPC_LINK",
       connectionId: vpcLink.ref,
       payloadFormatVersion: "1.0",
-      description: `Private ALB integration for ${route.service}.`,
-      requestParameters: {
-        "overwrite:header.x-request-id": "$context.requestId",
-        "overwrite:header.x-correlation-id": "$context.requestId"
-      }
+      description: `Shared dogfood runtime ALB integration for ${route.service}.`,
+      requestParameters: integrationRequestParameters(route)
     });
   }
 
@@ -272,7 +270,7 @@ export class AiAssistInfraStack extends cdk.Stack {
 
     return new lambda.Function(this, "HealthPlaceholderFunction", {
       functionName,
-      description: "Metadata-safe health fallback. Trusted-user MVP routes are wired to service runtimes.",
+      description: "Metadata-safe health fallback. Trusted-user MVP routes are wired to the shared dogfood runtime.",
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: "index.handler",
       timeout: cdk.Duration.seconds(5),
@@ -295,7 +293,6 @@ exports.handler = async (event) => {
     deploymentTarget: DeploymentTarget,
     tables: Record<string, dynamodb.Table>,
     keys: Record<KmsPurpose, kms.Key>,
-    serviceRoles: Record<string, iam.Role>,
     deploymentConfig: TargetDeploymentConfig
   ): ServiceRuntimeInfrastructure {
     const vpc = new ec2.Vpc(this, "ServiceVpc", {
@@ -315,7 +312,7 @@ exports.handler = async (event) => {
     });
     const vpcLinkSecurityGroup = new ec2.SecurityGroup(this, "HttpApiVpcLinkSecurityGroup", {
       vpc,
-      description: "Allows HTTP API VPC link traffic to internal service load balancers.",
+      description: "Allows HTTP API VPC link traffic to the shared runtime load balancer.",
       allowAllOutbound: true
     });
     const vpcLink = new apigatewayv2.CfnVpcLink(this, "HttpApiVpcLink", {
@@ -324,34 +321,27 @@ exports.handler = async (event) => {
       securityGroupIds: [vpcLinkSecurityGroup.securityGroupId]
     });
     const sharedEnvironment = this.buildSharedServiceEnvironment(deploymentTarget, tables, keys);
-    const serviceListeners: Partial<Record<ServiceName, elbv2.ApplicationListener>> = {};
-
-    for (const service of Object.values(SERVICES)) {
-      const runtime = this.createFargateHttpService(deploymentTarget, vpc, cluster, service, serviceRoles[service], sharedEnvironment, vpcLinkSecurityGroup);
-      serviceListeners[service] = runtime.listener;
-    }
-
-    const publicSseLoadBalancer = this.createPublicSseLoadBalancer(deploymentTarget, vpc, cluster, serviceRoles[SERVICES.SESSION_EVENTS], sharedEnvironment, deploymentConfig);
+    const dogfoodRuntimeRole = this.createDogfoodRuntimeRole(tables, keys);
+    const runtime = this.createDogfoodRuntimeService(deploymentTarget, vpc, cluster, dogfoodRuntimeRole, sharedEnvironment, vpcLinkSecurityGroup, deploymentConfig);
 
     return {
       vpcLink,
-      serviceListeners: serviceListeners as Record<ServiceName, elbv2.ApplicationListener>,
-      publicSseLoadBalancer
+      sharedHttpListener: runtime.httpListener
     };
   }
 
-  private createFargateHttpService(
+  private createDogfoodRuntimeService(
     deploymentTarget: DeploymentTarget,
     vpc: ec2.Vpc,
     cluster: ecs.Cluster,
-    service: ServiceName,
     taskRole: iam.Role,
     sharedEnvironment: Record<string, string>,
-    vpcLinkSecurityGroup: ec2.SecurityGroup
-  ): { readonly service: ecs.FargateService; readonly listener: elbv2.ApplicationListener } {
-    const serviceId = toPascalCase(service);
+    vpcLinkSecurityGroup: ec2.SecurityGroup,
+    deploymentConfig: TargetDeploymentConfig
+  ): { readonly service: ecs.FargateService; readonly httpListener: elbv2.ApplicationListener; readonly httpsListener: elbv2.ApplicationListener; readonly loadBalancer: elbv2.ApplicationLoadBalancer } {
+    const serviceId = "DogfoodRuntime";
     const taskDefinition = new ecs.FargateTaskDefinition(this, `${serviceId}TaskDefinition`, {
-      family: buildTargetResourceName(deploymentTarget, `${service}-task`),
+      family: buildTargetResourceName(deploymentTarget, `${DOGFOOD_RUNTIME_NAME}-task`),
       cpu: 256,
       memoryLimitMiB: 512,
       taskRole,
@@ -361,20 +351,21 @@ exports.handler = async (event) => {
       }
     });
     const logGroup = new logs.LogGroup(this, `${serviceId}LogGroup`, {
-      logGroupName: `/aws/ecs/${buildTargetResourceName(deploymentTarget, service)}`,
+      logGroupName: `/aws/ecs/${buildTargetResourceName(deploymentTarget, DOGFOOD_RUNTIME_NAME)}`,
       retention: retentionDays(deploymentTarget.logRetentionDays),
       removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
     });
     const container = taskDefinition.addContainer(`${serviceId}Container`, {
-      image: this.createPythonServiceContainerImage(service, serviceId),
+      image: this.createDogfoodRuntimeContainerImage(serviceId),
       logging: ecs.LogDrivers.awsLogs({
-        streamPrefix: service,
+        streamPrefix: DOGFOOD_RUNTIME_NAME,
         logGroup
       }),
       environment: {
         ...sharedEnvironment,
-        SERVICE_NAME: service,
-        SERVICE_PORT: String(SERVICE_CONTAINER_PORT)
+        SERVICE_NAME: DOGFOOD_RUNTIME_NAME,
+        SERVICE_PORT: String(SERVICE_CONTAINER_PORT),
+        ROUTE_OWNING_SERVICES: formatRouteOwnershipEnvironment()
       },
       healthCheck: {
         command: ["CMD-SHELL", `python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:${SERVICE_CONTAINER_PORT}/health', timeout=2)\nPY`],
@@ -390,114 +381,20 @@ exports.handler = async (event) => {
 
     const serviceSecurityGroup = new ec2.SecurityGroup(this, `${serviceId}ServiceSecurityGroup`, {
       vpc,
-      description: `Ingress to ${service} tasks from service load balancers only.`,
+      description: "Ingress to shared dogfood runtime tasks from the shared load balancer only.",
       allowAllOutbound: true
     });
     const loadBalancerSecurityGroup = new ec2.SecurityGroup(this, `${serviceId}LoadBalancerSecurityGroup`, {
       vpc,
-      description: `Ingress to ${service} internal load balancer from HTTP API VPC link.`,
+      description: "Shared public ALB for API Gateway VPC link traffic and browser EventSource SSE streams.",
       allowAllOutbound: true
     });
-    loadBalancerSecurityGroup.addIngressRule(vpcLinkSecurityGroup, ec2.Port.tcp(80), "HTTP API VPC link to service listener.");
-    serviceSecurityGroup.addIngressRule(loadBalancerSecurityGroup, ec2.Port.tcp(SERVICE_CONTAINER_PORT), "Service load balancer to container.");
-
-    const fargateService = new ecs.FargateService(this, `${serviceId}Service`, {
-      serviceName: buildTargetResourceName(deploymentTarget, service),
-      cluster,
-      taskDefinition,
-      desiredCount: 1,
-      platformVersion: ecs.FargatePlatformVersion.LATEST,
-      circuitBreaker: {
-        rollback: true
-      },
-      minHealthyPercent: 100,
-      assignPublicIp: true,
-      securityGroups: [serviceSecurityGroup],
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PUBLIC
-      }
-    });
-    const loadBalancer = new elbv2.ApplicationLoadBalancer(this, `${serviceId}InternalLoadBalancer`, {
-      loadBalancerName: loadBalancerName(deploymentTarget, service, "int"),
-      vpc,
-      internetFacing: false,
-      securityGroup: loadBalancerSecurityGroup
-    });
-    const listener = loadBalancer.addListener(`${serviceId}Listener`, {
-      port: 80,
-      protocol: elbv2.ApplicationProtocol.HTTP
-    });
-    listener.addTargets(`${serviceId}Targets`, {
-      port: SERVICE_CONTAINER_PORT,
-      protocol: elbv2.ApplicationProtocol.HTTP,
-      targets: [fargateService],
-      healthCheck: {
-        path: "/health",
-        healthyHttpCodes: "200-399",
-        interval: cdk.Duration.seconds(30)
-      },
-      deregistrationDelay: cdk.Duration.seconds(30)
-    });
-
-    return { service: fargateService, listener };
-  }
-
-  private createPublicSseLoadBalancer(
-    deploymentTarget: DeploymentTarget,
-    vpc: ec2.Vpc,
-    cluster: ecs.Cluster,
-    taskRole: iam.Role,
-    sharedEnvironment: Record<string, string>,
-    deploymentConfig: TargetDeploymentConfig
-  ): elbv2.ApplicationLoadBalancer {
-    const service = SERVICES.SESSION_EVENTS;
-    const serviceId = "SessionEventsSse";
-    const taskDefinition = new ecs.FargateTaskDefinition(this, `${serviceId}TaskDefinition`, {
-      family: buildTargetResourceName(deploymentTarget, `${service}-sse-task`),
-      cpu: 256,
-      memoryLimitMiB: 512,
-      taskRole,
-      runtimePlatform: {
-        cpuArchitecture: SERVICE_CONTAINER_CPU_ARCHITECTURE,
-        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX
-      }
-    });
-    const logGroup = new logs.LogGroup(this, `${serviceId}LogGroup`, {
-      logGroupName: `/aws/ecs/${buildTargetResourceName(deploymentTarget, `${service}-sse`)}`,
-      retention: retentionDays(deploymentTarget.logRetentionDays),
-      removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
-    });
-    const container = taskDefinition.addContainer(`${serviceId}Container`, {
-      image: this.createPythonServiceContainerImage(service, serviceId),
-      logging: ecs.LogDrivers.awsLogs({
-        streamPrefix: `${service}-sse`,
-        logGroup
-      }),
-      environment: {
-        ...sharedEnvironment,
-        SERVICE_NAME: service,
-        SERVICE_PORT: String(SERVICE_CONTAINER_PORT),
-        SSE_HEARTBEAT_SECONDS: String(DEFAULT_SSE_HEARTBEAT_SECONDS),
-        SSE_REPLAY_WINDOW_SECONDS: String(DEFAULT_SSE_REPLAY_WINDOW_SECONDS)
-      }
-    });
-    container.addPortMappings({
-      containerPort: SERVICE_CONTAINER_PORT
-    });
-    const serviceSecurityGroup = new ec2.SecurityGroup(this, `${serviceId}ServiceSecurityGroup`, {
-      vpc,
-      description: "Ingress to public SSE tasks from the public SSE load balancer only.",
-      allowAllOutbound: true
-    });
-    const loadBalancerSecurityGroup = new ec2.SecurityGroup(this, `${serviceId}LoadBalancerSecurityGroup`, {
-      vpc,
-      description: "Public HTTPS load balancer for browser EventSource SSE streams.",
-      allowAllOutbound: true
-    });
+    loadBalancerSecurityGroup.addIngressRule(vpcLinkSecurityGroup, ec2.Port.tcp(80), "HTTP API VPC link to shared runtime listener.");
     loadBalancerSecurityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), "Browser EventSource HTTPS.");
-    serviceSecurityGroup.addIngressRule(loadBalancerSecurityGroup, ec2.Port.tcp(SERVICE_CONTAINER_PORT), "SSE load balancer to container.");
+    serviceSecurityGroup.addIngressRule(loadBalancerSecurityGroup, ec2.Port.tcp(SERVICE_CONTAINER_PORT), "Shared load balancer to dogfood runtime container.");
+
     const fargateService = new ecs.FargateService(this, `${serviceId}Service`, {
-      serviceName: buildTargetResourceName(deploymentTarget, `${service}-sse`),
+      serviceName: buildTargetResourceName(deploymentTarget, DOGFOOD_RUNTIME_NAME),
       cluster,
       taskDefinition,
       desiredCount: 1,
@@ -513,11 +410,26 @@ exports.handler = async (event) => {
       }
     });
     const loadBalancer = new elbv2.ApplicationLoadBalancer(this, `${serviceId}LoadBalancer`, {
-      loadBalancerName: loadBalancerName(deploymentTarget, "session-events", "sse"),
+      loadBalancerName: loadBalancerName(deploymentTarget, DOGFOOD_RUNTIME_NAME, "pub"),
       vpc,
       internetFacing: true,
       securityGroup: loadBalancerSecurityGroup,
       idleTimeout: cdk.Duration.seconds(SSE_IDLE_TIMEOUT_SECONDS)
+    });
+    const httpListener = loadBalancer.addListener(`${serviceId}HttpListener`, {
+      port: 80,
+      protocol: elbv2.ApplicationProtocol.HTTP
+    });
+    httpListener.addTargets(`${serviceId}HttpTargets`, {
+      port: SERVICE_CONTAINER_PORT,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      targets: [fargateService],
+      healthCheck: {
+        path: "/health",
+        healthyHttpCodes: "200-399",
+        interval: cdk.Duration.seconds(30)
+      },
+      deregistrationDelay: cdk.Duration.seconds(30)
     });
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, "PublicHostedZone", {
       hostedZoneId: deploymentConfig.hostedZoneId,
@@ -530,9 +442,22 @@ exports.handler = async (event) => {
     const listener = loadBalancer.addListener(`${serviceId}HttpsListener`, {
       port: 443,
       protocol: elbv2.ApplicationProtocol.HTTPS,
-      certificates: [elbv2.ListenerCertificate.fromCertificateManager(certificate)]
+      certificates: [elbv2.ListenerCertificate.fromCertificateManager(certificate)],
+      defaultAction: elbv2.ListenerAction.fixedResponse(404, {
+        contentType: "application/json",
+        messageBody: JSON.stringify({
+          error: {
+            code: "ROUTE_NOT_FOUND",
+            category: "VALIDATION",
+            message: "Route not found.",
+            retryable: false
+          }
+        })
+      })
     });
-    listener.addTargets(`${serviceId}Targets`, {
+    listener.addTargets(`${serviceId}SseTargets`, {
+      conditions: [elbv2.ListenerCondition.pathPatterns(["/sessions/*/events"])],
+      priority: 10,
       port: SERVICE_CONTAINER_PORT,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [fargateService],
@@ -548,21 +473,17 @@ exports.handler = async (event) => {
       recordName: deploymentConfig.sseDomainName,
       target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(loadBalancer))
     });
-    return loadBalancer;
+    return { service: fargateService, httpListener, httpsListener: listener, loadBalancer };
   }
 
-  private createPythonServiceContainerImage(service: ServiceName, constructId: string): ecs.ContainerImage {
-    const asset = getPythonServiceContainerAsset(service);
+  private createDogfoodRuntimeContainerImage(constructId: string): ecs.ContainerImage {
     return ecs.ContainerImage.fromDockerImageAsset(
       new ecrAssets.DockerImageAsset(this, `${constructId}ImageAsset`, {
-        directory: PYTHON_SERVICE_DOCKER_CONTEXT,
+        directory: DOGFOOD_RUNTIME_DOCKER_CONTEXT,
         buildArgs: {
-          PYTHON_BASE_IMAGE: PYTHON_SERVICE_BASE_IMAGE,
-          PYTHON_PACKAGE: asset.pythonPackage
+          PYTHON_BASE_IMAGE: PYTHON_SERVICE_BASE_IMAGE
         },
-        buildContexts: {
-          service: path.join(WORKSPACE_ROOT, asset.sourceDirectory)
-        },
+        buildContexts: dogfoodRuntimeBuildContexts(),
         platform: SERVICE_CONTAINER_IMAGE_PLATFORM
       })
     );
@@ -594,6 +515,10 @@ exports.handler = async (event) => {
   }
 
   private createOperationalAlarms(deploymentTarget: DeploymentTarget): void {
+    if (deploymentTarget.environmentName === ENVIRONMENTS.DEV) {
+      return;
+    }
+
     const dashboard = new cloudwatch.Dashboard(this, "OperationsDashboard", {
       dashboardName: buildTargetResourceName(deploymentTarget, "operations-dashboard")
     });
@@ -657,6 +582,52 @@ exports.handler = async (event) => {
       roles[boundary.service] = role;
     }
     return roles;
+  }
+
+  private createDogfoodRuntimeRole(tables: Record<string, dynamodb.Table>, keys: Record<KmsPurpose, kms.Key>): iam.Role {
+    const role = new iam.Role(this, "DogfoodRuntimeRole", {
+      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+      description: "Shared dogfood runtime role with the union of current MVP service data-plane grants."
+    });
+    const tableAccess = new Map<string, Set<string>>();
+    const kmsAccess = new Map<KmsPurpose, Set<string>>();
+
+    for (const boundary of IAM_BOUNDARY_MATRIX) {
+      for (const accessBoundary of boundary.tableAccess) {
+        const access = tableAccess.get(accessBoundary.table) ?? new Set<string>();
+        accessBoundary.access.forEach((item) => access.add(item));
+        tableAccess.set(accessBoundary.table, access);
+      }
+      for (const accessBoundary of boundary.kmsAccess) {
+        const access = kmsAccess.get(accessBoundary.purpose) ?? new Set<string>();
+        accessBoundary.access.forEach((item) => access.add(item));
+        kmsAccess.set(accessBoundary.purpose, access);
+      }
+    }
+
+    for (const [tableName, access] of [...tableAccess.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const table = tables[tableName];
+      if (table) {
+        role.addToPolicy(new iam.PolicyStatement({
+          actions: dynamoDbActionsForAccess([...access]),
+          resources: [table.tableArn]
+        }));
+      }
+    }
+
+    for (const [purpose, access] of [...kmsAccess.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const key = keys[purpose];
+      if (key) {
+        role.addToPolicy(new iam.PolicyStatement({
+          actions: kmsActionsForAccess([...access]),
+          resources: [key.keyArn]
+        }));
+      }
+    }
+
+    cdk.Tags.of(role).add("ai-assist:runtime-topology", "shared-dogfood");
+    cdk.Tags.of(role).add("ai-assist:preserves-service-boundary-roles", "true");
+    return role;
   }
 }
 
@@ -722,6 +693,56 @@ function encryptionKeyPurposeForTable(spec: DynamoDbTableSpec): KmsPurpose | nul
 
 function formatTagListValue(values: readonly string[]): string {
   return values.join("+");
+}
+
+function formatRouteOwnershipEnvironment(): string {
+  return SERVICE_ROUTES.map((route) => `${route.method} ${route.path}=${route.service}`).join(",");
+}
+
+function integrationRequestParameters(route: { readonly requiresAuthentication: boolean }): Record<string, string> {
+  const parameters: Record<string, string> = {
+    "overwrite:header.x-request-id": "$context.requestId",
+    "overwrite:header.x-correlation-id": "$context.requestId"
+  };
+
+  if (route.requiresAuthentication) {
+    parameters["overwrite:header.x-ai-assist-tenant-id"] = "$context.authorizer.jwt.claims.tenant_id";
+    parameters["overwrite:header.x-ai-assist-user-id"] = "$context.authorizer.jwt.claims.user_id";
+  }
+
+  return parameters;
+}
+
+function dogfoodRuntimeBuildContexts(): Record<string, string> {
+  const serviceContexts = Object.fromEntries(
+    PYTHON_SERVICE_CONTAINER_ASSETS.map((asset) => [dogfoodBuildContextName(asset.service), path.join(WORKSPACE_ROOT, asset.sourceDirectory)])
+  );
+  return {
+    python_service: PYTHON_SERVICE_DOCKER_CONTEXT,
+    ...serviceContexts
+  };
+}
+
+function dogfoodBuildContextName(service: ServiceName): string {
+  if (service === SERVICES.AUTH) {
+    return "auth_service";
+  }
+  if (service === SERVICES.SECRETS) {
+    return "secrets_service";
+  }
+  if (service === SERVICES.ORCHESTRATION) {
+    return "orchestration_service";
+  }
+  if (service === SERVICES.SESSION_EVENTS) {
+    return "session_events_service";
+  }
+  if (service === SERVICES.CONTEXT) {
+    return "context_service";
+  }
+  if (service === SERVICES.GOOGLE_DOCS_ADAPTER) {
+    return "google_docs_adapter";
+  }
+  throw new Error(`unsupported dogfood runtime service context: ${service}`);
 }
 
 function tableId(spec: DynamoDbTableSpec): string {

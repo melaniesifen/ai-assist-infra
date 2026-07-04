@@ -186,7 +186,13 @@ test("synthesizes the HTTP and SSE route inventory", () => {
   template.hasResourceProperties("AWS::ApiGatewayV2::Integration", {
     IntegrationType: "HTTP_PROXY",
     ConnectionType: "VPC_LINK",
-    PayloadFormatVersion: "1.0"
+    PayloadFormatVersion: "1.0",
+    RequestParameters: Match.objectLike({
+      "overwrite:header.x-request-id": "$context.requestId",
+      "overwrite:header.x-correlation-id": "$context.requestId",
+      "overwrite:header.x-ai-assist-tenant-id": "$context.authorizer.jwt.claims.tenant_id",
+      "overwrite:header.x-ai-assist-user-id": "$context.authorizer.jwt.claims.user_id"
+    })
   });
   template.hasResourceProperties("AWS::Lambda::Function", {
     FunctionName: "ai-assist-dev-us-west-2-health-placeholder",
@@ -234,10 +240,16 @@ test("can disable API Gateway edge JWT only for dev infra health deploys", () =>
   });
 });
 
-test("synthesizes Fargate service runtimes and public ALB SSE hosting", () => {
+test("synthesizes one shared Fargate runtime and public ALB for API and SSE", () => {
   const template = synthTemplate();
 
   template.resourceCountIs("AWS::ECS::Cluster", 1);
+  template.resourceCountIs("AWS::ECS::Service", 1);
+  template.resourceCountIs("AWS::ECS::TaskDefinition", 1);
+  template.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 1);
+  template.resourceCountIs("AWS::ElasticLoadBalancingV2::Listener", 2);
+  template.resourceCountIs("AWS::ElasticLoadBalancingV2::ListenerRule", 1);
+  template.resourceCountIs("AWS::ElasticLoadBalancingV2::TargetGroup", 2);
   template.hasResourceProperties("AWS::ElasticLoadBalancingV2::LoadBalancer", {
     Scheme: "internet-facing",
     LoadBalancerAttributes: Match.arrayWith([
@@ -245,6 +257,35 @@ test("synthesizes Fargate service runtimes and public ALB SSE hosting", () => {
         Key: "idle_timeout.timeout_seconds",
         Value: "900"
       }
+    ])
+  });
+  template.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
+    Port: 80,
+    Protocol: "HTTP"
+  });
+  template.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
+    Port: 443,
+    Protocol: "HTTPS",
+    DefaultActions: Match.arrayWith([
+      Match.objectLike({
+        Type: "fixed-response"
+      })
+    ])
+  });
+  template.hasResourceProperties("AWS::ElasticLoadBalancingV2::ListenerRule", {
+    Priority: 10,
+    Conditions: Match.arrayWith([
+      Match.objectLike({
+        Field: "path-pattern",
+        PathPatternConfig: {
+          Values: ["/sessions/*/events"]
+        }
+      })
+    ]),
+    Actions: Match.arrayWith([
+      Match.objectLike({
+        Type: "forward"
+      })
     ])
   });
   template.hasResourceProperties("AWS::CertificateManager::Certificate", {
@@ -263,11 +304,7 @@ test("synthesizes Fargate service runtimes and public ALB SSE hosting", () => {
     HostedZoneId: "Z1234567890ABC"
   });
   template.hasResourceProperties("AWS::ECS::Service", {
-    ServiceName: "ai-assist-dev-us-west-2-ai-assist-session-events-service-sse",
-    PlatformVersion: "LATEST"
-  });
-  template.hasResourceProperties("AWS::ECS::Service", {
-    ServiceName: "ai-assist-dev-us-west-2-ai-assist-auth-service",
+    ServiceName: "ai-assist-dev-us-west-2-dogfood-runtime",
     PlatformVersion: "LATEST"
   });
   template.hasResourceProperties("AWS::ECS::TaskDefinition", {
@@ -289,15 +326,33 @@ test("synthesizes Fargate service runtimes and public ALB SSE hosting", () => {
           {
             Name: "SSE_REPLAY_WINDOW_SECONDS",
             Value: "300"
+          },
+          {
+            Name: "SERVICE_NAME",
+            Value: "dogfood-runtime"
+          },
+          {
+            Name: "ROUTE_OWNING_SERVICES",
+            Value: Match.stringLikeRegexp("POST /auth/login=ai-assist-auth-service")
           }
         ])
       })
     ])
   });
   template.hasResourceProperties("AWS::Logs::LogGroup", {
-    LogGroupName: "/aws/ecs/ai-assist-dev-us-west-2-ai-assist-session-events-service-sse",
+    LogGroupName: "/aws/ecs/ai-assist-dev-us-west-2-dogfood-runtime",
     RetentionInDays: 30
   });
+  template.hasResourceProperties("AWS::IAM::Role", {
+    Description: "Shared dogfood runtime role with the union of current MVP service data-plane grants.",
+    Tags: Match.arrayWith([
+      {
+        Key: "ai-assist:runtime-topology",
+        Value: "shared-dogfood"
+      }
+    ])
+  });
+  assert.ok(JSON.stringify(template.toJSON()).includes("ai-assist:preserves-service-boundary-roles"));
 });
 
 test("does not require service image or auth/certificate parameters after switching to assets and local context", () => {
@@ -311,15 +366,39 @@ test("does not require service image or auth/certificate parameters after switch
   assert.equal(JSON.stringify(template).includes("sseCertificateArn"), false);
 });
 
-test("synthesizes operational alarms for guarded dependency paths", () => {
+test("omits optional CloudWatch dashboard and alarms in dev", () => {
   const template = synthTemplate();
 
-  template.resourceCountIs("AWS::CloudWatch::Alarm", OPERATIONAL_ALARMS.length);
-  template.resourceCountIs("AWS::CloudWatch::Dashboard", 1);
-  template.hasResourceProperties("AWS::CloudWatch::Alarm", {
-    AlarmName: "ai-assist-dev-us-west-2-OAuthErrorCount-alarm",
+  template.resourceCountIs("AWS::CloudWatch::Alarm", 0);
+  template.resourceCountIs("AWS::CloudWatch::Dashboard", 0);
+  template.hasResourceProperties("AWS::Logs::LogGroup", {
+    LogGroupName: "/aws/apigateway/ai-assist-dev-us-west-2-http-api-access",
+    RetentionInDays: 30
+  });
+});
+
+test("preserves gamma and prod CloudWatch guardrails", () => {
+  const [, gammaTarget, prodTarget] = listDeploymentTargets();
+  const gammaTemplate = synthTemplate(gammaTarget);
+  const prodTemplate = synthTemplate(prodTarget);
+
+  gammaTemplate.resourceCountIs("AWS::CloudWatch::Alarm", OPERATIONAL_ALARMS.length);
+  gammaTemplate.resourceCountIs("AWS::CloudWatch::Dashboard", 1);
+  prodTemplate.resourceCountIs("AWS::CloudWatch::Alarm", OPERATIONAL_ALARMS.length);
+  prodTemplate.resourceCountIs("AWS::CloudWatch::Dashboard", 1);
+  gammaTemplate.hasResourceProperties("AWS::CloudWatch::Alarm", {
+    AlarmName: "ai-assist-gamma-us-west-2-OAuthErrorCount-alarm",
     TreatMissingData: "notBreaching"
   });
+  prodTemplate.hasResourceProperties("AWS::CloudWatch::Alarm", {
+    AlarmName: "ai-assist-prod-us-west-2-OAuthErrorCount-alarm",
+    TreatMissingData: "notBreaching"
+  });
+});
+
+test("synthesizes operational access logs for guarded dependency paths", () => {
+  const template = synthTemplate();
+
   template.hasResourceProperties("AWS::Logs::LogGroup", {
     LogGroupName: "/aws/apigateway/ai-assist-dev-us-west-2-http-api-access",
     RetentionInDays: 30
