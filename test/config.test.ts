@@ -668,6 +668,22 @@ test("parses local deployment config from CDK context without exposing secrets",
         edgeJwtAuthEnabled: true,
         productAuthIssuer: "https://auth.dev.example.test/",
         productAuthAudience: "ai-assist-dev",
+        allowedProductUsers: [
+          {
+            authSubject: "cognito-subject-a",
+            tenantId: "tenant-a",
+            userId: "user-a",
+            role: "owner",
+            status: "active"
+          },
+          {
+            authSubject: "cognito-subject-b",
+            tenantId: "tenant-b",
+            userId: "user-b",
+            role: "member",
+            status: "active"
+          }
+        ],
         trustedUserTenantId: "dev-tenant",
         trustedUserUserId: "dev-user",
         trustedUserAuthSubject: "trusted-user:dev-user",
@@ -680,6 +696,8 @@ test("parses local deployment config from CDK context without exposing secrets",
 
   assert.equal(config.productAuthAudience, "ai-assist-dev");
   assert.equal(config.productAuthIssuer, "https://auth.dev.example.test/");
+  assert.equal(config.allowedProductUsers.length, 2);
+  assert.equal(config.allowedProductUsers[0].authSubject, "cognito-subject-a");
   assert.equal(config.trustedUserTenantId, "dev-tenant");
   assert.equal(config.trustedUserUserId, "dev-user");
   assert.equal(config.trustedUserAuthSubject, "trusted-user:dev-user");
@@ -696,6 +714,7 @@ test("parses local deployment config from CDK context without exposing secrets",
           sseDomainName: "sse.dev.example.test",
           edgeJwtAuthEnabled: false,
           productAuthAudience: "ai-assist-dev",
+          allowedProductUsers: [],
           trustedUserTenantId: "dev-tenant",
           trustedUserUserId: "dev-user",
           trustedUserAuthSubject: "trusted-user:dev-user",
@@ -719,6 +738,15 @@ test("parses local deployment config from CDK context without exposing secrets",
             edgeJwtAuthEnabled: true,
             productAuthIssuer: "http://auth.dev.example.test/",
             productAuthAudience: "ai-assist-dev",
+            allowedProductUsers: [
+              {
+                authSubject: "cognito-subject-a",
+                tenantId: "tenant-a",
+                userId: "user-a",
+                role: "owner",
+                status: "active"
+              }
+            ],
             trustedUserTenantId: "dev-tenant",
             trustedUserUserId: "dev-user",
             trustedUserAuthSubject: "trusted-user:dev-user",
@@ -741,6 +769,15 @@ test("parses local deployment config from CDK context without exposing secrets",
             edgeJwtAuthEnabled: true,
             productAuthIssuer: "https://auth.dev.example.test/",
             productAuthAudience: "ai-assist-dev",
+            allowedProductUsers: [
+              {
+                authSubject: "cognito-subject-a",
+                tenantId: "tenant-a",
+                userId: "user-a",
+                role: "owner",
+                status: "active"
+              }
+            ],
             trustedUserTenantId: "dev-tenant",
             trustedUserUserId: "dev-user",
             trustedUserAuthSubject: "trusted-user:dev-user",
@@ -763,6 +800,15 @@ test("parses local deployment config from CDK context without exposing secrets",
             edgeJwtAuthEnabled: true,
             productAuthIssuer: "https://auth.dev.example.test/",
             productAuthAudience: "ai-assist-dev",
+            allowedProductUsers: [
+              {
+                authSubject: "cognito-subject-a",
+                tenantId: "tenant-a",
+                userId: "user-a",
+                role: "owner",
+                status: "active"
+              }
+            ],
             trustedUserTenantId: "dev-tenant",
             trustedUserUserId: "dev-user",
             trustedUserAuthSubject: "trusted-user:dev-user",
@@ -785,6 +831,15 @@ test("parses local deployment config from CDK context without exposing secrets",
             edgeJwtAuthEnabled: true,
             productAuthIssuer: "https://auth.dev.example.test/",
             productAuthAudience: "ai-assist-dev",
+            allowedProductUsers: [
+              {
+                authSubject: "cognito-subject-a",
+                tenantId: "tenant-a",
+                userId: "user-a",
+                role: "owner",
+                status: "active"
+              }
+            ],
             trustedUserTenantId: "dev-tenant",
             trustedUserUserId: "dev-user",
             trustedUserAuthSubject: "trusted-user:dev-user",
@@ -814,6 +869,15 @@ test("parses local deployment config from CDK context without exposing secrets",
               edgeJwtAuthEnabled: true,
               productAuthIssuer: "https://auth.dev.example.test/",
               productAuthAudience: "ai-assist-dev",
+              allowedProductUsers: [
+                {
+                  authSubject: "cognito-subject-a",
+                  tenantId: "tenant-a",
+                  userId: "user-a",
+                  role: "owner",
+                  status: "active"
+                }
+              ],
               trustedUserTenantId: "dev-tenant",
               trustedUserUserId: "dev-user",
               trustedUserAuthSubject: "trusted-user:dev-user",
@@ -837,6 +901,15 @@ test("parses local deployment config from CDK context without exposing secrets",
             sseDomainName: "sse.gamma.example.test",
             edgeJwtAuthEnabled: false,
             productAuthAudience: "ai-assist-gamma",
+            allowedProductUsers: [
+              {
+                authSubject: "cognito-subject-a",
+                tenantId: "tenant-a",
+                userId: "user-a",
+                role: "owner",
+                status: "active"
+              }
+            ],
             trustedUserTenantId: "gamma-tenant",
             trustedUserUserId: "gamma-user",
             trustedUserAuthSubject: "trusted-user:gamma-user",

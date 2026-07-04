@@ -7,6 +7,22 @@
       "edgeJwtAuthEnabled": false,
       "productAuthIssuer": "https://auth.dev.example.test/",
       "productAuthAudience": "ai-assist-dev",
+      "allowedProductUsers": [
+        {
+          "authSubject": "replace-with-dev-cognito-subject-a",
+          "tenantId": "dev-tenant-a",
+          "userId": "dev-user-a",
+          "role": "owner",
+          "status": "active"
+        },
+        {
+          "authSubject": "replace-with-dev-cognito-subject-b",
+          "tenantId": "dev-tenant-b",
+          "userId": "dev-user-b",
+          "role": "member",
+          "status": "active"
+        }
+      ],
       "trustedUserTenantId": "dev-tenant",
       "trustedUserUserId": "dev-user",
       "trustedUserAuthSubject": "trusted-user:dev-user",
@@ -20,6 +36,15 @@
       "edgeJwtAuthEnabled": true,
       "productAuthIssuer": "https://auth.gamma.example.test/",
       "productAuthAudience": "ai-assist-gamma",
+      "allowedProductUsers": [
+        {
+          "authSubject": "replace-with-gamma-cognito-subject-a",
+          "tenantId": "gamma-tenant-a",
+          "userId": "gamma-user-a",
+          "role": "owner",
+          "status": "active"
+        }
+      ],
       "trustedUserTenantId": "gamma-tenant",
       "trustedUserUserId": "gamma-user",
       "trustedUserAuthSubject": "trusted-user:gamma-user",
@@ -33,6 +58,15 @@
       "edgeJwtAuthEnabled": true,
       "productAuthIssuer": "https://auth.example.test/",
       "productAuthAudience": "ai-assist-prod",
+      "allowedProductUsers": [
+        {
+          "authSubject": "replace-with-prod-cognito-subject-a",
+          "tenantId": "prod-tenant-a",
+          "userId": "prod-user-a",
+          "role": "owner",
+          "status": "active"
+        }
+      ],
       "trustedUserTenantId": "prod-tenant",
       "trustedUserUserId": "prod-user",
       "trustedUserAuthSubject": "trusted-user:prod-user",

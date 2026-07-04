@@ -4,6 +4,7 @@ import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as cloudfrontOrigins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecrAssets from "aws-cdk-lib/aws-ecr-assets";
@@ -52,6 +53,11 @@ interface ServiceRuntimeInfrastructure {
   readonly sharedHttpListener: elbv2.ApplicationListener;
 }
 
+interface ProductAuthResources {
+  readonly issuer: string;
+  readonly audience: string;
+}
+
 type RuntimeSecretName =
   | "productAuthHmac"
   | "oauthStateSigning"
@@ -87,9 +93,10 @@ export class AiAssistInfraStack extends cdk.Stack {
     const secrets = this.createRuntimeSecrets(deploymentTarget);
     const serviceRoles = this.createServiceRoles(tables, keys);
     const api = this.createHttpApi(deploymentTarget);
+    const productAuth = this.createProductAuthResources(deploymentTarget, deploymentConfig);
     const webAppHosting = this.createWebAppHosting(deploymentTarget, deploymentConfig, props.webAppCertificate);
-    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, api.attrApiEndpoint, deploymentConfig);
-    this.createHttpRouteInventory(api, deploymentTarget, runtime, deploymentConfig);
+    const runtime = this.createServiceRuntimeInfrastructure(deploymentTarget, tables, keys, secrets, api.attrApiEndpoint, deploymentConfig, productAuth);
+    this.createHttpRouteInventory(api, deploymentTarget, runtime, deploymentConfig, productAuth);
     this.createOperationalAlarms(deploymentTarget);
 
     cdk.Tags.of(this).add("ai-assist:environment", environmentName);
@@ -117,6 +124,38 @@ export class AiAssistInfraStack extends cdk.Stack {
     new cdk.CfnOutput(this, "WebAppDistributionId", {
       value: webAppHosting.distribution.distributionId
     });
+    new cdk.CfnOutput(this, "ProductAuthIssuer", {
+      value: productAuth.issuer
+    });
+    new cdk.CfnOutput(this, "ProductAuthAudience", {
+      value: productAuth.audience
+    });
+  }
+
+  private createProductAuthResources(deploymentTarget: DeploymentTarget, deploymentConfig: TargetDeploymentConfig): ProductAuthResources {
+    void deploymentConfig;
+    const userPool = new cognito.UserPool(this, "ProductAuthUserPool", {
+      userPoolName: buildTargetResourceName(deploymentTarget, "product-auth-users"),
+      selfSignUpEnabled: false,
+      signInAliases: {
+        email: true
+      },
+      removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+    });
+    const appClient = userPool.addClient("ProductAuthAppClient", {
+      userPoolClientName: buildTargetResourceName(deploymentTarget, "product-auth-app-client"),
+      generateSecret: false,
+      authFlows: {
+        userSrp: true
+      },
+      preventUserExistenceErrors: true,
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1)
+    });
+    return {
+      issuer: cdk.Fn.join("", ["https://cognito-idp.", cdk.Stack.of(this).region, ".amazonaws.com/", userPool.userPoolId]),
+      audience: appClient.userPoolClientId
+    };
   }
 
   private createWebAppHosting(
@@ -308,16 +347,16 @@ export class AiAssistInfraStack extends cdk.Stack {
     });
   }
 
-  private createHttpRouteInventory(api: apigatewayv2.CfnApi, deploymentTarget: DeploymentTarget, runtime: ServiceRuntimeInfrastructure, deploymentConfig: TargetDeploymentConfig): void {
+  private createHttpRouteInventory(api: apigatewayv2.CfnApi, deploymentTarget: DeploymentTarget, runtime: ServiceRuntimeInfrastructure, deploymentConfig: TargetDeploymentConfig, productAuth: ProductAuthResources): void {
     const authorizer = deploymentConfig.edgeJwtAuthEnabled
       ? new apigatewayv2.CfnAuthorizer(this, "ProductSessionJwtAuthorizer", {
           apiId: api.ref,
           authorizerType: "JWT",
           identitySource: ["$request.header.Authorization"],
-          name: buildTargetResourceName(deploymentTarget, "product-session-authorizer"),
-          jwtConfiguration: {
-            issuer: deploymentConfig.productAuthIssuer,
-            audience: [deploymentConfig.productAuthAudience]
+            name: buildTargetResourceName(deploymentTarget, "product-session-authorizer"),
+            jwtConfiguration: {
+            issuer: productAuth.issuer,
+            audience: [productAuth.audience]
           }
         })
       : null;
@@ -449,7 +488,8 @@ exports.handler = async (event) => {
     keys: Record<KmsPurpose, kms.Key>,
     secrets: Record<RuntimeSecretName, secretsmanager.Secret>,
     apiBaseUrl: string,
-    deploymentConfig: TargetDeploymentConfig
+    deploymentConfig: TargetDeploymentConfig,
+    productAuth: ProductAuthResources
   ): ServiceRuntimeInfrastructure {
     const vpc = new ec2.Vpc(this, "ServiceVpc", {
       vpcName: buildTargetResourceName(deploymentTarget, "service-vpc"),
@@ -476,7 +516,7 @@ exports.handler = async (event) => {
       subnetIds: vpc.publicSubnets.map((subnet) => subnet.subnetId),
       securityGroupIds: [vpcLinkSecurityGroup.securityGroupId]
     });
-    const sharedEnvironment = this.buildSharedServiceEnvironment(deploymentTarget, tables, keys, apiBaseUrl, deploymentConfig);
+    const sharedEnvironment = this.buildSharedServiceEnvironment(deploymentTarget, tables, keys, apiBaseUrl, deploymentConfig, productAuth);
     const dogfoodRuntimeRole = this.createDogfoodRuntimeRole(tables, keys);
     const runtime = this.createDogfoodRuntimeService(deploymentTarget, vpc, cluster, dogfoodRuntimeRole, sharedEnvironment, secrets, vpcLinkSecurityGroup, deploymentConfig);
 
@@ -524,6 +564,8 @@ exports.handler = async (event) => {
         GOOGLE_OAUTH_CLIENT_SECRET_REF: buildTargetResourceName(deploymentTarget, "google-oauth-client-secret"),
         PLATFORM_PROVIDER_SECRET_REF_OPENAI: buildTargetResourceName(deploymentTarget, "platform-provider-openai-secret"),
         PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC: buildTargetResourceName(deploymentTarget, "platform-provider-anthropic-secret"),
+        PLATFORM_PROVIDER_QUOTA_MODE: "enforced",
+        PLATFORM_PROVIDER_AUDIT_MODE: "metadata",
         SERVICE_NAME: runtimeResourceName,
         SERVICE_PORT: String(SERVICE_CONTAINER_PORT),
         ROUTE_OWNING_SERVICES: formatRouteOwnershipEnvironment()
@@ -682,7 +724,8 @@ exports.handler = async (event) => {
     tables: Record<string, dynamodb.Table>,
     keys: Record<KmsPurpose, kms.Key>,
     apiBaseUrl: string,
-    deploymentConfig: TargetDeploymentConfig
+    deploymentConfig: TargetDeploymentConfig,
+    productAuth: ProductAuthResources
   ): Record<string, string> {
     const tableName = (name: string): string => tables[name]?.tableName ?? "";
     return {
@@ -698,8 +741,9 @@ exports.handler = async (event) => {
       TRUSTED_USER_TENANT_ID: deploymentConfig.trustedUserTenantId,
       TRUSTED_USER_USER_ID: deploymentConfig.trustedUserUserId,
       TRUSTED_USER_AUTH_SUBJECT: deploymentConfig.trustedUserAuthSubject,
-      PRODUCT_AUTH_ISSUER: deploymentConfig.productAuthIssuer,
-      PRODUCT_AUTH_AUDIENCE: deploymentConfig.productAuthAudience,
+      PRODUCT_AUTH_ISSUER: productAuth.issuer,
+      PRODUCT_AUTH_AUDIENCE: productAuth.audience,
+      AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON: JSON.stringify(deploymentConfig.allowedProductUsers),
       PLATFORM_PROVIDER_DEFAULT: "openai",
       APP_KMS_KEY_ID: keys[KMS_PURPOSES.OAUTH_TOKENS].keyArn,
       TENANT_TABLE_NAME: tableName("Tenants"),
@@ -908,8 +952,7 @@ function integrationRequestParameters(route: { readonly requiresAuthentication: 
   };
 
   if (route.requiresAuthentication && edgeJwtAuthEnabled) {
-    parameters["overwrite:header.x-ai-assist-tenant-id"] = "$context.authorizer.jwt.claims.tenant_id";
-    parameters["overwrite:header.x-ai-assist-user-id"] = "$context.authorizer.jwt.claims.user_id";
+    parameters["overwrite:header.x-ai-assist-auth-subject"] = "$context.authorizer.jwt.claims.sub";
   }
 
   return parameters;

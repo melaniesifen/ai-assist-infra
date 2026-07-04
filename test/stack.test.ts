@@ -8,16 +8,33 @@ import { listDynamoDbTableSpecs } from "../src/config/dynamodb-tables";
 import { listKmsPurposeMappings } from "../src/config/kms-purposes";
 import { OPERATIONAL_ALARMS } from "../src/config/operational-guardrails";
 import { SERVICE_ROUTES } from "../src/config/service-routes";
+import type { TargetDeploymentConfig } from "../src/config/deployment-config";
 import { AiAssistInfraStack } from "../src/stacks/ai-assist-infra-stack";
 import { AiAssistWebCertificateStack } from "../src/stacks/ai-assist-web-certificate-stack";
 
-const TEST_DEPLOYMENT_CONFIG = {
+const TEST_DEPLOYMENT_CONFIG: TargetDeploymentConfig = {
   hostedZoneId: "Z1234567890ABC",
   hostedZoneName: "example.test",
   sseDomainName: "sse.dev.example.test",
   edgeJwtAuthEnabled: true,
   productAuthIssuer: "https://auth.test.example/",
   productAuthAudience: "ai-assist-test",
+  allowedProductUsers: [
+    {
+      authSubject: "cognito-subject-a",
+      tenantId: "tenant-a",
+      userId: "user-a",
+      role: "owner",
+      status: "active"
+    },
+    {
+      authSubject: "cognito-subject-b",
+      tenantId: "tenant-b",
+      userId: "user-b",
+      role: "member",
+      status: "active"
+    }
+  ],
   trustedUserTenantId: "test-tenant",
   trustedUserUserId: "test-user",
   trustedUserAuthSubject: "trusted-user:test-user",
@@ -47,7 +64,7 @@ function synthTemplate(target: DeploymentTarget = listDeploymentTargets()[0]): T
   return Template.fromStack(stack);
 }
 
-function synthTemplateWithDeploymentConfig(deploymentConfig: typeof TEST_DEPLOYMENT_CONFIG, target: DeploymentTarget = listDeploymentTargets()[0]): Template {
+function synthTemplateWithDeploymentConfig(deploymentConfig: TargetDeploymentConfig, target: DeploymentTarget = listDeploymentTargets()[0]): Template {
   const app = new cdk.App();
   const stack = new AiAssistInfraStack(app, target.stackName, {
     deploymentTarget: target,
@@ -248,8 +265,12 @@ test("synthesizes the HTTP and SSE route inventory", () => {
     AuthorizerType: "JWT",
     IdentitySource: ["$request.header.Authorization"],
     JwtConfiguration: {
-      Audience: ["ai-assist-test"],
-      Issuer: "https://auth.test.example/"
+      Audience: [
+        {
+          Ref: Match.stringLikeRegexp("ProductAuthUserPoolProductAuthAppClient")
+        }
+      ],
+      Issuer: Match.anyValue()
     }
   });
   template.hasResourceProperties("AWS::ApiGatewayV2::Integration", {
@@ -259,9 +280,18 @@ test("synthesizes the HTTP and SSE route inventory", () => {
     RequestParameters: Match.objectLike({
       "overwrite:header.x-request-id": "$context.requestId",
       "overwrite:header.x-correlation-id": "$context.requestId",
-      "overwrite:header.x-ai-assist-tenant-id": "$context.authorizer.jwt.claims.tenant_id",
-      "overwrite:header.x-ai-assist-user-id": "$context.authorizer.jwt.claims.user_id"
+      "overwrite:header.x-ai-assist-auth-subject": "$context.authorizer.jwt.claims.sub"
     })
+  });
+  template.hasResourceProperties("AWS::Cognito::UserPool", {
+    UserPoolName: "ai-assist-dev-us-west-2-product-auth-users"
+  });
+  template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+    UserPoolId: {
+      Ref: Match.stringLikeRegexp("ProductAuthUserPool")
+    },
+    GenerateSecret: false,
+    PreventUserExistenceErrors: "ENABLED"
   });
   template.hasResourceProperties("AWS::Lambda::Function", {
     FunctionName: "ai-assist-dev-us-west-2-health-placeholder",
@@ -315,8 +345,7 @@ test("can disable API Gateway edge JWT only for dev infra health deploys", () =>
     })
   });
   const templateJson = template.toJSON();
-  assert.equal(JSON.stringify(templateJson).includes("$context.authorizer.jwt.claims.tenant_id"), false);
-  assert.equal(JSON.stringify(templateJson).includes("$context.authorizer.jwt.claims.user_id"), false);
+  assert.equal(JSON.stringify(templateJson).includes("$context.authorizer.jwt.claims.sub"), false);
 });
 
 test("synthesizes one shared Fargate runtime with private API ALB and public SSE ALB", () => {
@@ -326,6 +355,8 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
   template.resourceCountIs("AWS::ECS::Service", 1);
   template.resourceCountIs("AWS::ECS::TaskDefinition", 1);
   template.resourceCountIs("AWS::SecretsManager::Secret", 6);
+  template.resourceCountIs("AWS::Cognito::UserPool", 1);
+  template.resourceCountIs("AWS::Cognito::UserPoolClient", 1);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::LoadBalancer", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::Listener", 2);
   template.resourceCountIs("AWS::ElasticLoadBalancingV2::ListenerRule", 1);
@@ -452,11 +483,15 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
           },
           {
             Name: "PRODUCT_AUTH_ISSUER",
-            Value: "https://auth.test.example/"
+            Value: Match.anyValue()
           },
           {
             Name: "PRODUCT_AUTH_AUDIENCE",
-            Value: "ai-assist-test"
+            Value: Match.anyValue()
+          },
+          {
+            Name: "AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON",
+            Value: Match.stringLikeRegexp("cognito-subject-a")
           },
           {
             Name: "PLATFORM_PROVIDER_DEFAULT",
@@ -481,6 +516,14 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
           {
             Name: "PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC",
             Value: "ai-assist-dev-us-west-2-platform-provider-anthropic-secret"
+          },
+          {
+            Name: "PLATFORM_PROVIDER_QUOTA_MODE",
+            Value: "enforced"
+          },
+          {
+            Name: "PLATFORM_PROVIDER_AUDIT_MODE",
+            Value: "metadata"
           },
           {
             Name: "SERVICE_NAME",
