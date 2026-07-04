@@ -48,6 +48,8 @@ interface ServiceRuntimeInfrastructure {
   readonly sharedHttpListener: elbv2.ApplicationListener;
 }
 
+type RuntimeSecretName = "productAuthHmac" | "oauthStateSigning";
+
 export class AiAssistInfraStack extends cdk.Stack {
   public readonly tables: Readonly<Record<string, dynamodb.Table>>;
   public readonly keys: Readonly<Record<KmsPurpose, kms.Key>>;
@@ -151,11 +153,20 @@ export class AiAssistInfraStack extends cdk.Stack {
     return tables;
   }
 
-  private createRuntimeSecrets(deploymentTarget: DeploymentTarget): Record<"productAuthHmac", secretsmanager.Secret> {
+  private createRuntimeSecrets(deploymentTarget: DeploymentTarget): Record<RuntimeSecretName, secretsmanager.Secret> {
     return {
       productAuthHmac: new secretsmanager.Secret(this, "ProductAuthHmacSecret", {
         secretName: buildTargetResourceName(deploymentTarget, "product-auth-hmac-secret"),
         description: "Generated HMAC signing secret for dogfood product-session tokens.",
+        generateSecretString: {
+          passwordLength: 48,
+          excludePunctuation: true
+        },
+        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+      }),
+      oauthStateSigning: new secretsmanager.Secret(this, "OauthStateSigningSecret", {
+        secretName: buildTargetResourceName(deploymentTarget, "oauth-state-signing-secret"),
+        description: "Generated signing secret for dogfood Google OAuth state.",
         generateSecretString: {
           passwordLength: 48,
           excludePunctuation: true
@@ -309,7 +320,7 @@ exports.handler = async (event) => {
     deploymentTarget: DeploymentTarget,
     tables: Record<string, dynamodb.Table>,
     keys: Record<KmsPurpose, kms.Key>,
-    secrets: Record<"productAuthHmac", secretsmanager.Secret>,
+    secrets: Record<RuntimeSecretName, secretsmanager.Secret>,
     deploymentConfig: TargetDeploymentConfig
   ): ServiceRuntimeInfrastructure {
     const vpc = new ec2.Vpc(this, "ServiceVpc", {
@@ -353,7 +364,7 @@ exports.handler = async (event) => {
     cluster: ecs.Cluster,
     taskRole: iam.Role,
     sharedEnvironment: Record<string, string>,
-    secrets: Record<"productAuthHmac", secretsmanager.Secret>,
+    secrets: Record<RuntimeSecretName, secretsmanager.Secret>,
     vpcLinkSecurityGroup: ec2.SecurityGroup,
     deploymentConfig: TargetDeploymentConfig
   ): { readonly service: ecs.FargateService; readonly httpListener: elbv2.ApplicationListener; readonly httpsListener: elbv2.ApplicationListener; readonly publicLoadBalancer: elbv2.ApplicationLoadBalancer; readonly privateLoadBalancer: elbv2.ApplicationLoadBalancer } {
@@ -386,7 +397,8 @@ exports.handler = async (event) => {
         ROUTE_OWNING_SERVICES: formatRouteOwnershipEnvironment()
       },
       secrets: {
-        PRODUCT_AUTH_HMAC_SECRET: ecs.Secret.fromSecretsManager(secrets.productAuthHmac)
+        PRODUCT_AUTH_HMAC_SECRET: ecs.Secret.fromSecretsManager(secrets.productAuthHmac),
+        OAUTH_STATE_SIGNING_SECRET: ecs.Secret.fromSecretsManager(secrets.oauthStateSigning)
       },
       healthCheck: {
         command: ["CMD-SHELL", `python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:${SERVICE_CONTAINER_PORT}/health', timeout=2)\nPY`],
@@ -397,6 +409,7 @@ exports.handler = async (event) => {
       }
     });
     secrets.productAuthHmac.grantRead(taskDefinition.executionRole!);
+    secrets.oauthStateSigning.grantRead(taskDefinition.executionRole!);
     container.addPortMappings({
       containerPort: SERVICE_CONTAINER_PORT
     });
