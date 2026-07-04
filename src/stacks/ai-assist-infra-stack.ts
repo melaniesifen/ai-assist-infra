@@ -48,7 +48,7 @@ interface ServiceRuntimeInfrastructure {
   readonly sharedHttpListener: elbv2.ApplicationListener;
 }
 
-type RuntimeSecretName = "productAuthHmac" | "oauthStateSigning";
+type RuntimeSecretName = "productAuthHmac" | "oauthStateSigning" | "trustedUserBootstrap";
 
 export class AiAssistInfraStack extends cdk.Stack {
   public readonly tables: Readonly<Record<string, dynamodb.Table>>;
@@ -167,6 +167,15 @@ export class AiAssistInfraStack extends cdk.Stack {
       oauthStateSigning: new secretsmanager.Secret(this, "OauthStateSigningSecret", {
         secretName: buildTargetResourceName(deploymentTarget, "oauth-state-signing-secret"),
         description: "Generated signing secret for dogfood Google OAuth state.",
+        generateSecretString: {
+          passwordLength: 48,
+          excludePunctuation: true
+        },
+        removalPolicy: deploymentTarget.removalProtection ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY
+      }),
+      trustedUserBootstrap: new secretsmanager.Secret(this, "TrustedUserBootstrapSecret", {
+        secretName: buildTargetResourceName(deploymentTarget, "trusted-user-bootstrap-secret"),
+        description: "Generated bootstrap login secret for trusted-user dogfood auth.",
         generateSecretString: {
           passwordLength: 48,
           excludePunctuation: true
@@ -398,7 +407,8 @@ exports.handler = async (event) => {
       },
       secrets: {
         PRODUCT_AUTH_HMAC_SECRET: ecs.Secret.fromSecretsManager(secrets.productAuthHmac),
-        OAUTH_STATE_SIGNING_SECRET: ecs.Secret.fromSecretsManager(secrets.oauthStateSigning)
+        OAUTH_STATE_SIGNING_SECRET: ecs.Secret.fromSecretsManager(secrets.oauthStateSigning),
+        TRUSTED_USER_BOOTSTRAP_SECRET: ecs.Secret.fromSecretsManager(secrets.trustedUserBootstrap)
       },
       healthCheck: {
         command: ["CMD-SHELL", `python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:${SERVICE_CONTAINER_PORT}/health', timeout=2)\nPY`],
@@ -410,6 +420,7 @@ exports.handler = async (event) => {
     });
     secrets.productAuthHmac.grantRead(taskDefinition.executionRole!);
     secrets.oauthStateSigning.grantRead(taskDefinition.executionRole!);
+    secrets.trustedUserBootstrap.grantRead(taskDefinition.executionRole!);
     container.addPortMappings({
       containerPort: SERVICE_CONTAINER_PORT
     });

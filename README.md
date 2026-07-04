@@ -30,7 +30,7 @@ The current CDK app creates:
 - Public HTTPS ALB hosting for browser `EventSource` SSE streams on the same runtime path.
 - Service IAM roles with table and KMS grants derived from the IAM boundary matrix.
 - Generated Secrets Manager secrets for dogfood product-session HMAC signing
-  and Google OAuth state signing.
+  Google OAuth state signing, and trusted-user bootstrap login.
 - A shared dogfood runtime task role with the union of current MVP service data-plane grants; per-service IAM roles remain synthesized for ownership boundaries and future runtime split-out.
 - Default API Gateway throttling based on the route rate-limit tiers.
 
@@ -168,6 +168,9 @@ Manager secret and injected into the dogfood ECS task as an ECS secret. Do not
 place the HMAC value in `cdk.context.json`, `.env`, or shell command history.
 `OAUTH_STATE_SIGNING_SECRET` follows the same generated-secret pattern for
 Google OAuth state signing.
+`TRUSTED_USER_BOOTSTRAP_SECRET` is also generated and injected as an ECS secret;
+retrieve it from Secrets Manager when you need to call `/auth/login` in the
+trusted-user dev stack.
 `TrustedUserTenantId` is injected as `TRUSTED_USER_TENANT_ID`; it is not a
 secret, but it should be stable for a target so issued sessions and stored
 tenant-scoped records agree on the same tenant identifier.
@@ -242,6 +245,7 @@ Required keys:
 PRODUCT_AUTH_ISSUER
 PRODUCT_AUTH_AUDIENCE
 PRODUCT_AUTH_HMAC_SECRET
+TRUSTED_USER_BOOTSTRAP_SECRET
 WEB_APP_BASE_URL
 API_BASE_URL
 SSE_BASE_URL
