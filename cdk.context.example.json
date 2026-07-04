@@ -10,7 +10,8 @@
       "trustedUserTenantId": "dev-tenant",
       "trustedUserUserId": "dev-user",
       "trustedUserAuthSubject": "trusted-user:dev-user",
-      "webAppBaseUrl": "https://dev.example.test"
+      "webAppBaseUrl": "https://dev.example.test",
+      "googleOAuthClientId": "dev-google-client-id.apps.googleusercontent.com"
     },
     "gamma": {
       "hostedZoneId": "Z1234567890ABC",
@@ -22,7 +23,8 @@
       "trustedUserTenantId": "gamma-tenant",
       "trustedUserUserId": "gamma-user",
       "trustedUserAuthSubject": "trusted-user:gamma-user",
-      "webAppBaseUrl": "https://gamma.example.test"
+      "webAppBaseUrl": "https://gamma.example.test",
+      "googleOAuthClientId": "gamma-google-client-id.apps.googleusercontent.com"
     },
     "prod": {
       "hostedZoneId": "Z1234567890ABC",
@@ -34,7 +36,8 @@
       "trustedUserTenantId": "prod-tenant",
       "trustedUserUserId": "prod-user",
       "trustedUserAuthSubject": "trusted-user:prod-user",
-      "webAppBaseUrl": "https://app.example.test"
+      "webAppBaseUrl": "https://app.example.test",
+      "googleOAuthClientId": "prod-google-client-id.apps.googleusercontent.com"
     }
   }
 }

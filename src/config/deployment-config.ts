@@ -12,6 +12,7 @@ export interface TargetDeploymentConfig {
   readonly trustedUserUserId: string;
   readonly trustedUserAuthSubject: string;
   readonly webAppBaseUrl: string;
+  readonly googleOAuthClientId: string;
   readonly edgeJwtAuthEnabled: boolean;
 }
 
@@ -42,6 +43,7 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const trustedUserUserId = requireString(value.trustedUserUserId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserUserId`);
   const trustedUserAuthSubject = requireString(value.trustedUserAuthSubject, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserAuthSubject`);
   const webAppBaseUrl = normalizeHttpsUrl(requireString(value.webAppBaseUrl, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl`), `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl`);
+  const googleOAuthClientId = requireString(value.googleOAuthClientId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.googleOAuthClientId`);
 
   if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneId must be a Route 53 hosted zone id`);
@@ -76,6 +78,7 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
     trustedUserUserId,
     trustedUserAuthSubject,
     webAppBaseUrl,
+    googleOAuthClientId,
     edgeJwtAuthEnabled
   };
 }

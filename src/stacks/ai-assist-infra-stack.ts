@@ -569,6 +569,7 @@ exports.handler = async (event) => {
       ALLOWED_ORIGINS: deploymentConfig.webAppBaseUrl,
       API_BASE_URL: apiBaseUrl,
       SSE_BASE_URL: `https://${deploymentConfig.sseDomainName}`,
+      GOOGLE_OAUTH_CLIENT_ID: deploymentConfig.googleOAuthClientId,
       TRUSTED_USER_MODE: "true",
       TRUSTED_USER_TENANT_ID: deploymentConfig.trustedUserTenantId,
       TRUSTED_USER_USER_ID: deploymentConfig.trustedUserUserId,

@@ -158,6 +158,7 @@ TrustedUserTenantId
 TrustedUserUserId
 TrustedUserAuthSubject
 WebAppBaseUrl
+GoogleOAuthClientId
 ```
 
 `ProductAuthAudience` is also injected into the shared dogfood runtime as
@@ -188,6 +189,10 @@ the runtime to keep CORS/redirect origin checks aligned with the web app URL.
 HTTP API endpoint and injects it into the dogfood runtime.
 `SSE_BASE_URL` is also derived by CDK from `SseDomainName` and injected into the
 dogfood runtime.
+`GoogleOAuthClientId` is injected as `GOOGLE_OAUTH_CLIENT_ID`. It is OAuth app
+configuration rather than a credential secret, but the real environment value
+belongs in ignored `cdk.context.json`; committed examples should use
+placeholders.
 
 Copy `cdk.context.example.json` to ignored `cdk.context.json` and replace the
 placeholder values for each target you plan to synthesize or deploy. CDK uses
@@ -230,7 +235,8 @@ Example local context shape:
       "trustedUserTenantId": "dev-tenant",
       "trustedUserUserId": "dev-user",
       "trustedUserAuthSubject": "trusted-user:dev-user",
-      "webAppBaseUrl": "https://dev.example.test"
+      "webAppBaseUrl": "https://dev.example.test",
+      "googleOAuthClientId": "dev-google-client-id.apps.googleusercontent.com"
     }
   }
 }

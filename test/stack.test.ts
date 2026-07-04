@@ -19,7 +19,8 @@ const TEST_DEPLOYMENT_CONFIG = {
   trustedUserTenantId: "test-tenant",
   trustedUserUserId: "test-user",
   trustedUserAuthSubject: "trusted-user:test-user",
-  webAppBaseUrl: "https://app.test.example"
+  webAppBaseUrl: "https://app.test.example",
+  googleOAuthClientId: "test-google-client-id.apps.googleusercontent.com"
 };
 
 const TEST_DEV_EDGE_AUTH_DISABLED_CONFIG = {
@@ -354,6 +355,10 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
           {
             Name: "SSE_BASE_URL",
             Value: "https://sse.dev.example.test"
+          },
+          {
+            Name: "GOOGLE_OAUTH_CLIENT_ID",
+            Value: "test-google-client-id.apps.googleusercontent.com"
           },
           {
             Name: "TRUSTED_USER_TENANT_ID",

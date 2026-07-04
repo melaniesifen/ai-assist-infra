@@ -124,7 +124,8 @@ test("parses local deployment config from CDK context without exposing secrets",
         trustedUserTenantId: "dev-tenant",
         trustedUserUserId: "dev-user",
         trustedUserAuthSubject: "trusted-user:dev-user",
-        webAppBaseUrl: "https://dev.example.test/"
+        webAppBaseUrl: "https://dev.example.test/",
+        googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com"
       }
     },
     "dev"
@@ -136,6 +137,7 @@ test("parses local deployment config from CDK context without exposing secrets",
   assert.equal(config.trustedUserUserId, "dev-user");
   assert.equal(config.trustedUserAuthSubject, "trusted-user:dev-user");
   assert.equal(config.webAppBaseUrl, "https://dev.example.test");
+  assert.equal(config.googleOAuthClientId, "dev-google-client-id.apps.googleusercontent.com");
   assert.equal(config.edgeJwtAuthEnabled, true);
   assert.equal(
     parseDeploymentConfigContext(
@@ -149,7 +151,8 @@ test("parses local deployment config from CDK context without exposing secrets",
           trustedUserTenantId: "dev-tenant",
           trustedUserUserId: "dev-user",
           trustedUserAuthSubject: "trusted-user:dev-user",
-          webAppBaseUrl: "https://dev.example.test"
+          webAppBaseUrl: "https://dev.example.test",
+          googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com"
         }
       },
       "dev"
@@ -171,7 +174,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             trustedUserTenantId: "dev-tenant",
             trustedUserUserId: "dev-user",
             trustedUserAuthSubject: "trusted-user:dev-user",
-            webAppBaseUrl: "https://dev.example.test"
+            webAppBaseUrl: "https://dev.example.test",
+            googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com"
           }
         },
         "dev"
@@ -192,7 +196,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             trustedUserTenantId: "dev-tenant",
             trustedUserUserId: "dev-user",
             trustedUserAuthSubject: "trusted-user:dev-user",
-            webAppBaseUrl: "https://dev.example.test"
+            webAppBaseUrl: "https://dev.example.test",
+            googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com"
           }
         },
         "dev"
@@ -212,7 +217,8 @@ test("parses local deployment config from CDK context without exposing secrets",
             trustedUserTenantId: "gamma-tenant",
             trustedUserUserId: "gamma-user",
             trustedUserAuthSubject: "trusted-user:gamma-user",
-            webAppBaseUrl: "https://gamma.example.test"
+            webAppBaseUrl: "https://gamma.example.test",
+            googleOAuthClientId: "gamma-google-client-id.apps.googleusercontent.com"
           }
         },
         "gamma"
