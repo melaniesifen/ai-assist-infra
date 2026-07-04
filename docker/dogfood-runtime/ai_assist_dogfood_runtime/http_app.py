@@ -4,6 +4,8 @@ import importlib
 import json
 import os
 import re
+import base64
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -12,12 +14,20 @@ Handler = Callable[..., dict[str, Any]]
 _AUTH_APP: Any | None = None
 _GOOGLE_DOCS_APP: Any | None = None
 _CONTEXT_APP: Any | None = None
+_ACTION_SERVICE: Any | None = None
+_ORCHESTRATION_CONFIGURED = False
 TRUSTED_IDENTITY_HEADERS = {
     "x-ai-assist-tenant-id",
     "x-ai-assist-user-id",
     "x-ai-assist-auth-subject",
 }
 DOGFOOD_CONTEXT_CONSENT_GRANT_JSON_ENV = "AI_ASSIST_DOGFOOD_CONTEXT_CONSENT_GRANT_JSON"
+TRUSTED_UPSTREAM_SSE_HEADERS_ENV = "AI_ASSIST_TRUSTED_UPSTREAM_SSE_HEADERS"
+PLATFORM_PROVIDER_DEFAULT_ENV = "PLATFORM_PROVIDER_DEFAULT"
+PLATFORM_PROVIDER_SECRET_REF_PREFIX = "PLATFORM_PROVIDER_SECRET_REF_"
+SUPPORTED_PLATFORM_PROVIDERS = ("openai", "anthropic")
+COMMAND_ROUTE_RE = re.compile(r"^/resource-sessions/[^/]+/commands$")
+ACTION_DEPENDENCY_ENV_KEYS = ("PROPOSED_ACTION_TABLE_NAME", "APP_KMS_KEY_ID")
 
 
 @dataclass(frozen=True)
@@ -54,7 +64,9 @@ ROUTES: tuple[RouteDispatch, ...] = (
     route("GET", r"^/context-modes$", "ai-assist-context-service", "ai_assist_context_service"),
     route("PUT", r"^/resource-sessions/[^/]+/context-mode$", "ai-assist-context-service", "ai_assist_context_service"),
     route("POST", r"^/resource-sessions/[^/]+/context-preview$", "ai-assist-context-service", "ai_assist_context_service"),
+    route("POST", r"^/resource-sessions/[^/]+/actions$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
     route("GET", r"^/resource-sessions/[^/]+/actions$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
+    route("GET", r"^/resource-sessions/[^/]+/actions/[^/]+$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
     route("POST", r"^/resource-sessions/[^/]+/actions/[^/]+/approve$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
     route("POST", r"^/resource-sessions/[^/]+/actions/[^/]+/reject$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
     route("POST", r"^/resource-sessions/[^/]+/apply-action$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
@@ -72,8 +84,6 @@ def handle_http_request(
     dispatch = find_route(method, path)
     if dispatch is None:
         return json_response(404, "DOGFOOD_ROUTE_NOT_FOUND", "No dogfood runtime route matches this request.", "unknown-service", path)
-    if dispatch.supports_sse:
-        return sse_ready_response(dispatch.owning_service)
 
     package_handler = dogfood_package_handler(dispatch)
     if package_handler is None:
@@ -107,6 +117,10 @@ def load_package_handler(package: str) -> Handler | None:
 
 
 def dogfood_package_handler(dispatch: RouteDispatch) -> Handler | None:
+    if dispatch.package == "ai_assist_orchestration":
+        return orchestration_handler
+    if dispatch.package == "ai_assist_session_events":
+        return session_events_handler
     if dispatch.package == "ai_assist_google_docs_adapter":
         return google_docs_handler
     if dispatch.package == "ai_assist_context_service":
@@ -156,6 +170,70 @@ def context_handler(
         return exception_response(error, "ai-assist-context-service", path)
 
 
+def orchestration_handler(
+    *,
+    method: str,
+    path: str,
+    headers: dict[str, str] | None = None,
+    query_string: str = "",
+    body: bytes | None = None,
+) -> dict[str, Any]:
+    del query_string
+    request_headers = headers or {}
+    try:
+        package_handler = load_package_handler("ai_assist_orchestration")
+        if package_handler is None:
+            return json_response(
+                501,
+                "DOGFOOD_ROUTE_HANDLER_NOT_IMPLEMENTED",
+                "The shared dogfood runtime includes orchestration, but the package does not expose http_app.handle_http_request yet.",
+                "ai-assist-orchestration-service",
+                path,
+            )
+        configure_dogfood_orchestration_runtime()
+        return normalize_package_response(
+            package_handler(
+                method=method.upper(),
+                path=path,
+                headers=authenticated_downstream_headers(request_headers),
+                body=dogfood_orchestration_body(method.upper(), path, body),
+            )
+        )
+    except Exception as error:
+        return exception_response(error, "ai-assist-orchestration-service", path)
+
+
+def session_events_handler(
+    *,
+    method: str,
+    path: str,
+    headers: dict[str, str] | None = None,
+    query_string: str = "",
+    body: bytes | None = None,
+) -> dict[str, Any]:
+    try:
+        package_handler = load_package_handler("ai_assist_session_events")
+        if package_handler is None:
+            return json_response(
+                501,
+                "DOGFOOD_ROUTE_HANDLER_NOT_IMPLEMENTED",
+                "The session-events package does not expose http_app.handle_http_request yet.",
+                "ai-assist-session-events-service",
+                path,
+            )
+        return normalize_package_response(
+            package_handler(
+                method=method,
+                path=path,
+                headers=session_events_auth_headers(headers or {}),
+                query_string=query_string,
+                body=body,
+            )
+        )
+    except Exception as error:
+        return exception_response(error, "ai-assist-session-events-service", path)
+
+
 def dogfood_auth_app() -> Any:
     global _AUTH_APP
     if _AUTH_APP is None:
@@ -188,6 +266,477 @@ def dogfood_context_app() -> Any:
             load_consent_grant=dogfood_context_consent_grant,
         )
     return _CONTEXT_APP
+
+
+def configure_dogfood_orchestration_runtime() -> None:
+    global _ORCHESTRATION_CONFIGURED
+    if _ORCHESTRATION_CONFIGURED:
+        return
+    orchestration_module = importlib.import_module("ai_assist_orchestration")
+    configure_runtime = getattr(orchestration_module, "configure_http_runtime", None)
+    if not callable(configure_runtime):
+        _ORCHESTRATION_CONFIGURED = True
+        return
+
+    action_service = dogfood_action_service(orchestration_module)
+    command_service = orchestration_module.create_command_service(
+        context_service=DogfoodContextDependency(),
+        provider_registry=DogfoodProviderRegistry(),
+        event_publisher=dogfood_session_event_publisher(),
+        policy_service=AllowTrustedUserPolicy(),
+        prompt_builder=MetadataOnlyPromptBuilder(),
+        action_service=action_service,
+    )
+    missing_actions = DogfoodMissingActionDependency()
+    runtime = orchestration_module.OrchestrationHttpRuntime(
+        boundary=orchestration_module.create_http_command_boundary(
+            command_service=command_service,
+            action_service=action_service or missing_actions,
+        ),
+        provider_status_service=DogfoodProviderStatusService(),
+        resolve_auth=dogfood_orchestration_auth,
+    )
+    configure_runtime(runtime)
+    _ORCHESTRATION_CONFIGURED = True
+
+
+class DogfoodContextDependency:
+    def resolve_context(self, request: dict[str, Any]) -> dict[str, Any]:
+        context_mode = request.get("contextMode") or "ACTIVE_RESOURCE"
+        resource_id = request.get("resourceId")
+        if not isinstance(resource_id, str) or not resource_id.strip():
+            return {
+                "authorized": False,
+                "reasonCode": "RESOURCE_ID_REQUIRED",
+            }
+        context_request = {
+            "tenantId": request.get("tenantId"),
+            "userId": request.get("userId"),
+            "sessionId": request.get("sessionId"),
+            "provider": "google_docs",
+            "contextMode": context_mode,
+            "resourceRef": {
+                "provider": "google_docs",
+                "resourceId": resource_id.strip(),
+            },
+            "requestId": request.get("requestId"),
+            "explicitUserAction": True,
+        }
+        grant = dogfood_context_consent_grant(context_request, None)
+        if grant is not None:
+            context_request["consentGrant"] = grant
+        result = importlib.import_module("ai_assist_context_service.read_path").read_context_with_consent(
+            context_request,
+            dogfood_google_docs_read_context,
+        )
+        context = result.get("context") if isinstance(result, dict) else None
+        if not isinstance(context, dict):
+            return {"authorized": False, "reasonCode": "CONTEXT_UNAVAILABLE"}
+        return {
+            **context,
+            "authorized": True,
+            "resourceRevision": result.get("resourceRevision") or context.get("resourceRevision"),
+        }
+
+
+class DogfoodProviderRegistry:
+    def get(self, provider_name: str) -> Any | None:
+        provider = normalize_provider_name(provider_name)
+        if provider is None or provider not in SUPPORTED_PLATFORM_PROVIDERS:
+            return None
+        if provider_secret_ref(provider) is None:
+            return None
+        return DogfoodProviderDependency(provider)
+
+
+class DogfoodProviderDependency:
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+
+    async def stream(self, request: dict[str, Any]) -> Any:
+        access = request.get("providerAccess") if isinstance(request.get("providerAccess"), dict) else {}
+        reference = access.get("reference")
+        if not isinstance(reference, str) or not reference.strip():
+            yield provider_error_event(
+                provider=self.provider,
+                code="PLATFORM_PROVIDER_SECRET_NOT_CONFIGURED",
+                category="unavailable",
+                message="Platform provider access is not configured.",
+                dependency_status="not_configured",
+            )
+            return
+        yield provider_error_event(
+            provider=self.provider,
+            code="DOGFOOD_PROVIDER_CALLS_DISABLED",
+            category="unavailable",
+            message="Dogfood runtime provider calls require an explicit provider client hook.",
+            dependency_status="provider_client_not_configured",
+        )
+
+
+class DogfoodProviderStatusService:
+    def list_provider_status(self, _identity: dict[str, Any], _request: dict[str, Any]) -> dict[str, Any]:
+        return platform_provider_status_payload()
+
+
+class AllowTrustedUserPolicy:
+    def evaluate(self, request: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "decision": "ALLOW",
+            "decisionId": request.get("requestId"),
+            "reasonCode": "TRUSTED_USER_DOGFOOD",
+        }
+
+
+class MetadataOnlyPromptBuilder:
+    def build_prompt(self, request: dict[str, Any]) -> dict[str, Any]:
+        command = request.get("command") if isinstance(request.get("command"), dict) else {}
+        context = request.get("context") if isinstance(request.get("context"), dict) else {}
+        return {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Use the validated dogfood context to assist with the requested document workflow.",
+                }
+            ],
+            "metadata": {
+                "sessionId": command.get("sessionId"),
+                "contextMode": command.get("contextMode"),
+                "resourceProvider": context.get("provider") or "google_docs",
+            },
+        }
+
+
+def dogfood_session_event_publisher() -> Any:
+    try:
+        session_events_http_app = importlib.import_module("ai_assist_session_events.http_app")
+        publish_session_event = getattr(session_events_http_app, "publish_session_event", None)
+        if callable(publish_session_event):
+            return SessionEventsHttpAppPublisher(publish_session_event)
+    except Exception:
+        pass
+    return NoopSessionEventPublisher()
+
+
+class SessionEventsHttpAppPublisher:
+    def __init__(self, publish_session_event: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+        self._publish_session_event = publish_session_event
+
+    def publish(self, event: dict[str, Any]) -> dict[str, Any]:
+        return self._publish_session_event(event)
+
+
+class NoopSessionEventPublisher:
+    def publish(self, event: dict[str, Any]) -> dict[str, Any]:
+        return event
+
+
+class DogfoodMissingActionDependency:
+    async def create_proposed_action(self, _identity: dict, input_data: dict) -> dict:
+        raise dogfood_orchestration_dependency_missing("create_action", input_data)
+
+    async def list_actions(self, _identity: dict, input_data: dict) -> dict:
+        raise dogfood_orchestration_dependency_missing("list_actions", input_data)
+
+    async def get_action(self, _identity: dict, input_data: dict) -> dict:
+        raise dogfood_orchestration_dependency_missing("get_action", input_data)
+
+    async def approve_action(self, _identity: dict, input_data: dict) -> dict:
+        raise dogfood_orchestration_dependency_missing("approve_action", input_data)
+
+    async def reject_action(self, _identity: dict, input_data: dict) -> dict:
+        raise dogfood_orchestration_dependency_missing("reject_action", input_data)
+
+    async def apply_action(self, _identity: dict, input_data: dict) -> dict:
+        raise dogfood_orchestration_dependency_missing("apply_action", input_data)
+
+
+def dogfood_orchestration_dependency_missing(operation: str, payload: dict[str, Any]) -> Exception:
+    return importlib.import_module("ai_assist_orchestration.http_app").deployed_dependencies_missing(operation, payload)
+
+
+def dogfood_action_service(orchestration_module: Any | None = None) -> Any | None:
+    global _ACTION_SERVICE
+    if _ACTION_SERVICE is not None:
+        return _ACTION_SERVICE
+    missing = [key for key in ACTION_DEPENDENCY_ENV_KEYS if not os.environ.get(key)]
+    if missing:
+        return None
+    orchestration_module = orchestration_module or importlib.import_module("ai_assist_orchestration")
+    _ACTION_SERVICE = orchestration_module.create_action_service(
+        action_store=DynamoDbActionStore(table_name=os.environ["PROPOSED_ACTION_TABLE_NAME"]),
+        connector=dogfood_google_docs_action_connector(),
+        event_publisher=dogfood_session_event_publisher(),
+        consent_service=DogfoodApplyConsent(),
+        payload_vault=KmsPayloadVault(key_id=os.environ["APP_KMS_KEY_ID"]),
+        token_service=DogfoodApplyTokenService(AuthGoogleTokenProvider(dogfood_auth_app())),
+    )
+    return _ACTION_SERVICE
+
+
+def dogfood_google_docs_action_connector() -> Any:
+    connector_module = importlib.import_module("ai_assist_google_docs_adapter.orchestration_connector")
+    return connector_module.GoogleDocsOrchestrationConnector(dogfood_google_docs_app().adapter)
+
+
+class DogfoodApplyConsent:
+    def validate_apply_consent(self, request: dict[str, Any]) -> dict[str, Any]:
+        grant = dogfood_context_consent_grant(request, request.get("consentGrantId"))
+        if not grant:
+            return {"allowed": False, "reasonCode": "CONSENT_REQUIRED"}
+        resource_ref = grant.get("resourceRef") if isinstance(grant.get("resourceRef"), dict) else {}
+        if grant.get("status") != "active":
+            return {"allowed": False, "reasonCode": "CONSENT_NOT_ACTIVE"}
+        if grant.get("tenantId") != request.get("tenantId") or grant.get("userId") != request.get("userId"):
+            return {"allowed": False, "reasonCode": "CONSENT_IDENTITY_MISMATCH"}
+        if resource_ref.get("resourceId") not in {request.get("resourceId"), "*"}:
+            return {"allowed": False, "reasonCode": "CONSENT_RESOURCE_MISMATCH"}
+        return {"allowed": True}
+
+
+class DogfoodApplyTokenService:
+    def __init__(self, token_provider: Any) -> None:
+        self.token_provider = token_provider
+
+    def validate_apply_token(self, request: dict[str, Any]) -> dict[str, Any]:
+        token_status = self.token_provider.get_access_token(
+            {
+                **request,
+                "operation": "applyAction",
+                "requiredScopes": ["https://www.googleapis.com/auth/documents"],
+            }
+        )
+        if token_status.get("accessToken") or token_status.get("status") == "available":
+            return {"valid": True}
+        return {"valid": False, "reasonCode": "RECONNECT_REQUIRED"}
+
+
+class KmsPayloadVault:
+    def __init__(self, *, key_id: str) -> None:
+        self.key_id = key_id
+        self.client = boto3_client("kms")
+
+    def encrypt(self, payload: dict | None) -> dict[str, str]:
+        plaintext = json.dumps(payload or {}, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        response = self.client.encrypt(
+            KeyId=self.key_id,
+            Plaintext=plaintext,
+            EncryptionContext={"purpose": "proposed-action-payload"},
+        )
+        return {"kmsCiphertext": base64.b64encode(response["CiphertextBlob"]).decode("ascii")}
+
+    def decrypt(self, encrypted_payload: dict) -> dict:
+        ciphertext = encrypted_payload.get("kmsCiphertext")
+        if not isinstance(ciphertext, str) or not ciphertext:
+            raise ValueError("encrypted payload ciphertext is required")
+        response = self.client.decrypt(
+            CiphertextBlob=base64.b64decode(ciphertext),
+            EncryptionContext={"purpose": "proposed-action-payload"},
+        )
+        payload = json.loads(response["Plaintext"].decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("encrypted payload must decode to a JSON object")
+        return payload
+
+
+class DynamoDbActionStore:
+    def __init__(self, *, table_name: str) -> None:
+        self.table = boto3_resource("dynamodb").Table(table_name)
+
+    def create(self, action: dict) -> dict:
+        item = _action_to_item(action)
+        self.table.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(tenantId) AND attribute_not_exists(actionId)",
+        )
+        return deepcopy(action)
+
+    def get(self, action_id: str) -> dict | None:
+        for item in self._scan_actions():
+            if item.get("actionId") == action_id:
+                return _item_to_action(item)
+        return None
+
+    def list_for_session(self, *, tenant_id: str, user_id: str, session_id: str) -> list[dict]:
+        actions = [
+            _item_to_action(item)
+            for item in self._scan_actions()
+            if item.get("tenantId") == tenant_id
+            and item.get("userId") == user_id
+            and item.get("sessionId") == session_id
+        ]
+        return sorted(actions, key=lambda action: (action.get("createdAt", ""), action.get("actionId", "")))
+
+    def update(self, action_id: str, updater: Callable[[dict], dict]) -> dict | None:
+        current = self.get(action_id)
+        if current is None:
+            return None
+        updated = updater(deepcopy(current))
+        self.table.put_item(Item=_action_to_item(updated))
+        return deepcopy(updated)
+
+    def transition(
+        self,
+        action_id: str,
+        *,
+        allowed_statuses: set[str],
+        patch: dict,
+        reject_if_apply_locked: bool = False,
+    ) -> dict:
+        current = self.get(action_id)
+        if current is None:
+            return {"kind": "NOT_FOUND"}
+        if reject_if_apply_locked and current.get("applyLock"):
+            return {"kind": "APPLY_IN_PROGRESS", "action": current}
+        if current.get("status") not in allowed_statuses:
+            return {"kind": "STATUS_MISMATCH", "action": current}
+        updated = {**current, **patch}
+        condition = "attribute_exists(actionId) AND #status IN ({statuses})".format(
+            statuses=", ".join(f":status{index}" for index, _status in enumerate(allowed_statuses))
+        )
+        expression_names = {"#status": "status"}
+        expression_values = {f":status{index}": status for index, status in enumerate(allowed_statuses)}
+        if reject_if_apply_locked:
+            condition = f"{condition} AND attribute_not_exists(applyLock)"
+        if not self._conditional_put(_action_to_item(updated), condition, expression_names, expression_values):
+            latest = self.get(action_id)
+            if latest is None:
+                return {"kind": "NOT_FOUND"}
+            if reject_if_apply_locked and latest.get("applyLock"):
+                return {"kind": "APPLY_IN_PROGRESS", "action": latest}
+            return {"kind": "STATUS_MISMATCH", "action": latest}
+        return {"kind": "UPDATED", "action": deepcopy(updated)}
+
+    def reserve_apply(self, action_id: str, idempotency_key: str, started_at: str) -> dict:
+        current = self.get(action_id)
+        if current is None:
+            return {"kind": "NOT_FOUND"}
+        if current.get("applyResult") and current.get("idempotencyKey") == idempotency_key:
+            return {"kind": "REPLAY", "applyResult": current["applyResult"]}
+        if current.get("applyLock"):
+            return {
+                "kind": "IN_PROGRESS" if current["applyLock"]["idempotencyKey"] == idempotency_key else "IN_PROGRESS_DIFFERENT_KEY",
+                "action": current,
+            }
+        if current.get("status") != "APPROVED":
+            return {"kind": "NOT_APPROVED", "action": current}
+        reserved = {
+            **current,
+            "idempotencyKey": idempotency_key,
+            "applyLock": {"idempotencyKey": idempotency_key, "startedAt": started_at},
+            "updatedAt": started_at,
+        }
+        if not self._conditional_put(
+            _action_to_item(reserved),
+            "attribute_exists(actionId) AND #status = :approved AND attribute_not_exists(applyLock)",
+            {"#status": "status"},
+            {":approved": "APPROVED"},
+        ):
+            latest = self.get(action_id)
+            if latest is None:
+                return {"kind": "NOT_FOUND"}
+            if latest.get("applyResult") and latest.get("idempotencyKey") == idempotency_key:
+                return {"kind": "REPLAY", "applyResult": latest["applyResult"]}
+            if latest.get("applyLock"):
+                return {
+                    "kind": "IN_PROGRESS" if latest["applyLock"]["idempotencyKey"] == idempotency_key else "IN_PROGRESS_DIFFERENT_KEY",
+                    "action": latest,
+                }
+            if latest.get("status") != "APPROVED":
+                return {"kind": "NOT_APPROVED", "action": latest}
+            return {"kind": "IN_PROGRESS_DIFFERENT_KEY", "action": latest}
+        return {"kind": "RESERVED", "action": deepcopy(reserved)}
+
+    def complete_apply(self, action_id: str, idempotency_key: str, patch: dict) -> dict | None:
+        current = self.get(action_id)
+        if current is None:
+            return None
+        if current.get("applyLock", {}).get("idempotencyKey") != idempotency_key:
+            return current
+        updated = {**current, **patch}
+        updated.pop("applyLock", None)
+        if not self._conditional_put(
+            _action_to_item(updated),
+            "attribute_exists(actionId) AND #applyLock.#idempotencyKey = :idempotencyKey",
+            {"#applyLock": "applyLock", "#idempotencyKey": "idempotencyKey"},
+            {":idempotencyKey": idempotency_key},
+        ):
+            return self.get(action_id)
+        return deepcopy(updated)
+
+    def _conditional_put(
+        self,
+        item: dict,
+        condition_expression: str,
+        expression_attribute_names: dict[str, str],
+        expression_attribute_values: dict[str, Any],
+    ) -> bool:
+        try:
+            self.table.put_item(
+                Item=item,
+                ConditionExpression=condition_expression,
+                ExpressionAttributeNames=expression_attribute_names,
+                ExpressionAttributeValues=expression_attribute_values,
+            )
+            return True
+        except Exception as error:
+            if _is_conditional_check_failed(error):
+                return False
+            raise
+
+    def _scan_actions(self) -> list[dict]:
+        items: list[dict] = []
+        kwargs: dict[str, Any] = {}
+        while True:
+            response = self.table.scan(**kwargs)
+            items.extend(response.get("Items", []))
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                return items
+            kwargs["ExclusiveStartKey"] = last_key
+
+
+def _action_to_item(action: dict) -> dict:
+    item = deepcopy(action)
+    expires_at = item.get("expiresAt")
+    if isinstance(expires_at, str):
+        item["ttl"] = _iso_epoch_seconds(expires_at)
+    return item
+
+
+def _item_to_action(item: dict) -> dict:
+    action = deepcopy(item)
+    action.pop("ttl", None)
+    return action
+
+
+def _is_conditional_check_failed(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = response.get("Error", {}).get("Code")
+        return code == "ConditionalCheckFailedException"
+    return error.__class__.__name__ == "ConditionalCheckFailedException"
+
+
+def _iso_epoch_seconds(value: str) -> int:
+    from datetime import datetime, timezone
+
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def boto3_client(service_name: str) -> Any:
+    import boto3
+
+    return boto3.client(service_name)
+
+
+def boto3_resource(service_name: str) -> Any:
+    import boto3
+
+    return boto3.resource(service_name)
 
 
 def dogfood_context_consent_grant(request: dict[str, Any], consent_grant_id: str | None) -> dict[str, Any] | None:
@@ -279,6 +828,122 @@ def authenticated_downstream_headers(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
+def dogfood_orchestration_auth(request: dict[str, Any]) -> dict[str, str]:
+    headers = request.get("headers") if isinstance(request.get("headers"), dict) else {}
+    product_session = dogfood_auth_app().product_session_codec.verify_bearer(header_value(headers, "authorization"))
+    identity = dogfood_auth_app().identity_service.derive_identity(product_session=product_session)
+    return {
+        "tenantId": identity["tenantId"],
+        "userId": identity["userId"],
+    }
+
+
+def dogfood_orchestration_body(method: str, path: str, body: bytes | None) -> bytes | None:
+    if method != "POST" or not COMMAND_ROUTE_RE.match(path):
+        return body
+    payload = parse_json_body_bytes(body)
+    provider = normalize_provider_name(payload.get("provider")) or default_platform_provider()
+    if provider is not None:
+        payload.setdefault("provider", provider)
+        payload["providerAccess"] = platform_provider_access_payload(provider, payload.get("providerAccess"))
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def parse_json_body_bytes(body: bytes | str | None) -> dict[str, Any]:
+    if body in {None, b"", ""}:
+        return {}
+    raw = body.decode("utf-8") if isinstance(body, bytes) else body
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("JSON request body must be an object.")
+    return parsed
+
+
+def platform_provider_access_payload(provider: str, existing: Any) -> dict[str, Any]:
+    if isinstance(existing, dict) and existing.get("source") == "byo":
+        return {
+            "source": "byo",
+            "secretRef": existing.get("secretRef"),
+        }
+    return {
+        "source": "platform",
+        "reference": provider_secret_ref(provider),
+    }
+
+
+def platform_provider_status_payload() -> dict[str, Any]:
+    return {
+        "providers": [provider_status(provider) for provider in SUPPORTED_PLATFORM_PROVIDERS],
+        "defaultProvider": default_platform_provider(),
+    }
+
+
+def provider_status(provider: str) -> dict[str, Any]:
+    configured = provider_secret_ref(provider) is not None
+    return {
+        "provider": provider,
+        "status": "available" if configured else "not_configured",
+        "accessSource": "platform",
+        "configured": configured,
+        "available": configured,
+        "default": provider == default_platform_provider(),
+        **({} if configured else {"reasonCode": "PLATFORM_PROVIDER_SECRET_REF_MISSING"}),
+    }
+
+
+def provider_secret_ref(provider: str) -> str | None:
+    value = os.environ.get(f"{PLATFORM_PROVIDER_SECRET_REF_PREFIX}{provider.upper()}")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def default_platform_provider() -> str | None:
+    configured = normalize_provider_name(os.environ.get(PLATFORM_PROVIDER_DEFAULT_ENV))
+    if configured in SUPPORTED_PLATFORM_PROVIDERS:
+        return configured
+    for provider in SUPPORTED_PLATFORM_PROVIDERS:
+        if provider_secret_ref(provider) is not None:
+            return provider
+    return None
+
+
+def normalize_provider_name(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip().lower()
+
+
+def provider_error_event(*, provider: str, code: str, category: str, message: str, dependency_status: str) -> dict[str, Any]:
+    return {
+        "type": "error",
+        "provider": provider,
+        "error": {
+            "code": code,
+            "category": category,
+            "message": message,
+            "retryable": False,
+            "dependencyStatus": dependency_status,
+        },
+    }
+
+
+def session_events_auth_headers(headers: dict[str, str]) -> dict[str, str]:
+    if header_value(headers, "authorization"):
+        return authenticated_downstream_headers(headers)
+    if trusted_upstream_sse_headers_enabled():
+        return dict(headers)
+    return {
+        key: value
+        for key, value in headers.items()
+        if str(key).lower() not in TRUSTED_IDENTITY_HEADERS
+    }
+
+
+def trusted_upstream_sse_headers_enabled() -> bool:
+    return os.environ.get(TRUSTED_UPSTREAM_SSE_HEADERS_ENV, "").strip().lower() == "true"
+
+
 def header_value(headers: dict[str, str], name: str) -> str | None:
     lowered = name.lower()
     for key, value in headers.items():
@@ -326,18 +991,6 @@ def exception_response(error: Exception, service: str, path: str) -> dict[str, A
     }
 
 
-def sse_ready_response(service: str) -> dict[str, Any]:
-    return {
-        "status": 200,
-        "headers": {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-store",
-            "X-Accel-Buffering": "no",
-        },
-        "body": b": ai-assist dogfood runtime sse path ready\n\n",
-    }
-
-
 def normalize_package_response(response: dict[str, Any]) -> dict[str, Any]:
     status = response.get("status", response.get("statusCode", 500))
     headers = response.get("headers", {})
@@ -351,6 +1004,7 @@ def normalize_package_response(response: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "headers": headers,
         "body": body,
+        **({"stream": response["stream"]} if response.get("stream") is not None else {}),
     }
 
 

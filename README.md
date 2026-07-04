@@ -163,7 +163,11 @@ current MVP service packages from their workspace repos, and exposes the
 `ai_assist_dogfood_runtime.http_app` dispatcher as the container HTTP adapter.
 The dispatcher maps method/path to the owning service package, delegates to a
 package `http_app.handle_http_request` when present, and returns explicit safe
-fallbacks for packages whose route adapters are not implemented yet. The image
+fallbacks for packages whose route adapters are not implemented yet. The SSE
+route delegates to the session-events package runtime, verifies product-session
+bearer identity by default, supports trusted upstream identity headers only when
+`AI_ASSIST_TRUSTED_UPSTREAM_SSE_HEADERS=true`, and the shared Python wrapper
+preserves long-lived stream responses, keepalive frames, and close logging. The image
 uses `python:3.13-slim-bookworm`, never `latest`, compiles source during image
 build, runs as UID/GID `65534`, and exposes `SERVICE_PORT=8080`.
 
@@ -223,6 +227,13 @@ alongside `PRODUCT_AUTH_AUDIENCE`.
 Secrets Manager placeholder secrets. Replace only the provider secret values you
 plan to use after deploy; the default dogfood provider is
 `PLATFORM_PROVIDER_DEFAULT=openai`.
+The shared dogfood runtime exposes `/providers` from this platform provider
+metadata after verifying the product-session bearer token and does not return
+secret reference names or credential values. Orchestration command requests are
+also adapted in-process to use the configured platform provider access reference
+and product-session-derived tenant/user identity; until an explicit provider
+client hook is supplied, the runtime returns a structured provider dependency
+error instead of calling a real model provider.
 `TrustedUserTenantId` is injected as `TRUSTED_USER_TENANT_ID`; it is not a
 secret, but it should be stable for a target so issued sessions and stored
 tenant-scoped records agree on the same tenant identifier.

@@ -30,6 +30,7 @@ const REQUIRED_RATE_LIMIT_PATHS = Object.freeze([
   "/resource-sessions/{sessionId}/context-preview",
   "/sessions/{sessionId}/events",
   "/resource-sessions/{sessionId}/actions",
+  "/resource-sessions/{sessionId}/actions/{actionId}",
   "/resource-sessions/{sessionId}/apply-action"
 ]);
 

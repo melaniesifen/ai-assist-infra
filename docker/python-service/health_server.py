@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
@@ -11,6 +12,8 @@ from urllib.parse import urlparse
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "unknown-service")
 PYTHON_PACKAGE = os.environ.get("PYTHON_PACKAGE", "")
 SERVICE_PORT = int(os.environ.get("SERVICE_PORT", "8080"))
+SSE_HEARTBEAT_SECONDS = int(os.environ.get("SSE_HEARTBEAT_SECONDS", "25"))
+SSE_POLL_SECONDS = 0.25
 _SERVICE_HTTP_HANDLER = None
 
 
@@ -109,6 +112,11 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _write_response(self, response: dict[str, Any]) -> None:
+        stream = response.get("stream")
+        if stream is not None:
+            self._write_stream_response(response, stream)
+            return
+
         body = response.get("body", b"")
         if isinstance(body, str):
             body = body.encode("utf-8")
@@ -119,6 +127,32 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _write_stream_response(self, response: dict[str, Any], stream: Any) -> None:
+        status_code = int(response.get("status", 500))
+        self.send_response(status_code)
+        for key, value in response.get("headers", {}).items():
+            self.send_header(key, str(value))
+        self.end_headers()
+
+        last_heartbeat = time.monotonic()
+        try:
+            while True:
+                for chunk in stream.pop_pending():
+                    self.wfile.write(_encode_chunk(chunk))
+                    self.wfile.flush()
+                now = time.monotonic()
+                if now - last_heartbeat >= SSE_HEARTBEAT_SECONDS:
+                    heartbeat = stream.heartbeat()
+                    if heartbeat:
+                        self.wfile.write(_encode_chunk(heartbeat))
+                        self.wfile.flush()
+                    last_heartbeat = now
+                time.sleep(SSE_POLL_SECONDS)
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close(disconnect_reason="client_disconnect")
 
 
 def main() -> None:
@@ -137,6 +171,12 @@ def service_http_handler() -> Any:
     except Exception:
         _SERVICE_HTTP_HANDLER = False
     return _SERVICE_HTTP_HANDLER or None
+
+
+def _encode_chunk(chunk: Any) -> bytes:
+    if isinstance(chunk, bytes):
+        return chunk
+    return str(chunk).encode("utf-8")
 
 
 if __name__ == "__main__":

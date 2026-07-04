@@ -86,7 +86,12 @@ test("defines a dogfood runtime image that includes every service package", () =
 
   assert.match(dockerfile, /PYTHON_PACKAGE=ai_assist_dogfood_runtime/);
   assert.match(dispatcher, /def handle_http_request/);
-  assert.match(dispatcher, /text\/event-stream/);
+  assert.match(dispatcher, /supports_sse=True/);
+  assert.match(dispatcher, /def session_events_handler/);
+  assert.match(dispatcher, /def _conditional_put/);
+  assert.match(dispatcher, /attribute_not_exists\(applyLock\)/);
+  assert.match(dispatcher, /#applyLock\.#idempotencyKey = :idempotencyKey/);
+  assert.match(sharedServer, /def _write_stream_response/);
   for (const asset of PYTHON_SERVICE_CONTAINER_ASSETS) {
     const buildContext = buildContextsByService.get(asset.service);
     assert.ok(buildContext, `${asset.service} must have a dogfood build context`);
@@ -128,24 +133,164 @@ test("dogfood runtime source hash changes when service source changes", () => {
   assert.equal(buildDogfoodRuntimeSourceHash(workspaceRoot, runtimeRoot), afterServiceChange);
 });
 
-test("dogfood runtime dispatcher imports and handles the SSE route", () => {
-  const script = [
-    "import ai_assist_dogfood_runtime.http_app as app",
-    "response = app.handle_http_request(method='GET', path='/sessions/test-session/events')",
-    "assert response['status'] == 200, response",
-    "assert response['headers']['Content-Type'] == 'text/event-stream', response",
-    "assert b'dogfood runtime sse path ready' in response['body'], response"
-  ].join("; ");
+test("dogfood runtime dispatcher delegates the SSE route to the session-events runtime", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+import os
+from ai_assist_session_events import http_app as events
+events.reset_runtime_for_tests()
+os.environ[app.TRUSTED_UPSTREAM_SSE_HEADERS_ENV] = "true"
+events.publish_session_event({
+    "eventId": "evt_001",
+    "tenantId": "tenant_001",
+    "userId": "user_001",
+    "sessionId": "session_001",
+    "requestId": "req_001",
+    "correlationId": "corr_001",
+    "type": "progress",
+    "sequence": 1,
+    "createdAt": "2026-05-29T00:00:00.000Z",
+    "payload": {"stage": "context.loading", "status": "started", "messageCode": "CONTEXT_LOADING"},
+})
+response = app.handle_http_request(
+    method="GET",
+    path="/sessions/session_001/events",
+    headers={"X-AI-Assist-Tenant-Id": "tenant_001", "X-AI-Assist-User-Id": "user_001"},
+)
+assert response["status"] == 200, response
+assert response["headers"]["Content-Type"] == "text/event-stream; charset=utf-8", response
+chunk = response["stream"].pop_pending()[0]
+assert chunk.startswith("id: evt_001\\n"), chunk
+assert "dogfood runtime sse path ready" not in chunk, chunk
+app.dogfood_session_event_publisher().publish({
+    "eventId": "evt_002",
+    "tenantId": "tenant_001",
+    "userId": "user_001",
+    "sessionId": "session_001",
+    "requestId": "req_002",
+    "correlationId": "corr_001",
+    "type": "assistant.delta",
+    "sequence": 2,
+    "createdAt": "2026-05-29T00:00:01.000Z",
+    "payload": {"messageId": "msg_001", "delta": "hello", "index": 0},
+})
+published_chunk = response["stream"].pop_pending()[0]
+assert published_chunk.startswith("id: evt_002\\n"), published_chunk
+assert '"type":"assistant.delta"' in published_chunk, published_chunk
+`;
   const result = spawnSync("python3", ["-c", script], {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-session-events-service/src")
+      ].join(path.delimiter)
     },
     encoding: "utf8"
   });
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime rejects caller-supplied SSE trusted headers unless trusted upstream is enabled", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+from ai_assist_session_events import http_app as events
+events.reset_runtime_for_tests()
+response = app.handle_http_request(
+    method="GET",
+    path="/sessions/session_001/events",
+    headers={"X-AI-Assist-Tenant-Id": "spoofed-tenant", "X-AI-Assist-User-Id": "spoofed-user"},
+)
+assert response["status"] == 401, response
+assert "stream" not in response, response
+assert events.stream_log_records()[0]["errorCode"] == "AUTH_CONTEXT_REQUIRED", events.stream_log_records()
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-session-events-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime derives session-events identity from product session bearer", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+from ai_assist_session_events import http_app as events
+events.reset_runtime_for_tests()
+class Codec:
+    def verify_bearer(self, header):
+        assert header == "Bearer session-1", header
+        return {"session": "session-1"}
+class Identity:
+    def derive_identity(self, product_session):
+        assert product_session == {"session": "session-1"}, product_session
+        return {"tenantId": "tenant_001", "userId": "user_001", "authSubject": "trusted-subject"}
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+app._AUTH_APP = AuthApp()
+events.publish_session_event({
+    "eventId": "evt_001",
+    "tenantId": "tenant_001",
+    "userId": "user_001",
+    "sessionId": "session_001",
+    "requestId": "req_001",
+    "correlationId": "corr_001",
+    "type": "progress",
+    "sequence": 1,
+    "createdAt": "2026-05-29T00:00:00.000Z",
+    "payload": {"stage": "context.loading", "status": "started", "messageCode": "CONTEXT_LOADING"},
+})
+response = app.handle_http_request(
+    method="GET",
+    path="/sessions/session_001/events",
+    headers={
+        "authorization": "Bearer session-1",
+        "x-ai-assist-tenant-id": "attacker-tenant",
+        "X-Ai-Assist-User-Id": "attacker-user",
+        "Last-Event-ID": "evt_missing",
+    },
+)
+assert response["status"] == 200, response
+assert response["headers"]["Content-Type"] == "text/event-stream; charset=utf-8", response
+chunk = response["stream"].pop_pending()[0]
+assert "REFRESH_SESSION_STATE" in chunk, chunk
+open_log = events.stream_log_records()[0]
+assert open_log["tenantId"] == "tenant_001", open_log
+assert open_log["userId"] == "user_001", open_log
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-session-events-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("shared python HTTP wrapper preserves streaming responses without content length", () => {
+  const wrapper = readFileSync(path.join(process.cwd(), "docker/python-service/health_server.py"), "utf8");
+
+  assert.match(wrapper, /def _write_stream_response/);
+  assert.match(wrapper, /stream\.pop_pending\(\)/);
+  assert.match(wrapper, /stream\.heartbeat\(\)/);
+  assert.match(wrapper, /close\(disconnect_reason="client_disconnect"\)/);
 });
 
 test("dogfood runtime dispatcher normalizes lambda-style package responses", () => {
@@ -163,6 +308,135 @@ test("dogfood runtime dispatcher normalizes lambda-style package responses", () 
     env: {
       ...process.env,
       PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime action routes return safe dependency errors until action deps are configured", () => {
+  const script = `
+import json
+import ai_assist_dogfood_runtime.http_app as app
+class Codec:
+    def verify_bearer(self, header):
+        assert header == "Bearer session-1", header
+        return {"session": "session-1"}
+class Identity:
+    def derive_identity(self, product_session):
+        return {"tenantId": "tenant_001", "userId": "user_001", "authSubject": "trusted-subject"}
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+app._AUTH_APP = AuthApp()
+app._ORCHESTRATION_CONFIGURED = False
+response = app.handle_http_request(
+    method="GET",
+    path="/resource-sessions/session_001/actions",
+    headers={"authorization": "Bearer session-1"},
+)
+body = json.loads(response["body"].decode("utf-8"))
+assert response["status"] == 501, response
+assert body["error"]["code"] == "ORCHESTRATION_DEPENDENCIES_NOT_CONFIGURED", body
+assert body["error"]["metadata"]["operation"] == "list_actions", body
+assert body["error"]["metadata"]["sessionId"] == "session_001", body
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-orchestration-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime wires proposed action create list get approve reject and apply dependencies", () => {
+  const script = `
+import json
+import ai_assist_dogfood_runtime.http_app as app
+class Codec:
+    def verify_bearer(self, header):
+        assert header == "Bearer session-1", header
+        return {"session": "session-1"}
+class Identity:
+    def derive_identity(self, product_session):
+        return {"tenantId": "tenant_001", "userId": "user_001", "authSubject": "trusted-subject"}
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+class FakeActions:
+    def __init__(self):
+        self.calls = []
+    async def create_proposed_action(self, identity, input_data):
+        self.calls.append(("create", identity, input_data))
+        return {"actionId": "action_001", "status": "PROPOSED", "sessionId": input_data["sessionId"], "resourceId": input_data["resourceId"]}
+    async def list_actions(self, identity, input_data):
+        self.calls.append(("list", identity, input_data))
+        return {"actions": [{"actionId": "action_001", "status": "PROPOSED"}]}
+    async def get_action(self, identity, input_data):
+        self.calls.append(("get", identity, input_data))
+        return {"actionId": input_data["actionId"], "status": "PROPOSED"}
+    async def approve_action(self, identity, input_data):
+        self.calls.append(("approve", identity, input_data))
+        return {"actionId": input_data["actionId"], "status": "APPROVED"}
+    async def reject_action(self, identity, input_data):
+        self.calls.append(("reject", identity, input_data))
+        return {"actionId": input_data["actionId"], "status": "REJECTED"}
+    async def apply_action(self, identity, input_data):
+        self.calls.append(("apply", identity, input_data))
+        return {"actionId": input_data["actionId"], "status": "APPLIED"}
+fake_actions = FakeActions()
+app._AUTH_APP = AuthApp()
+app._ORCHESTRATION_CONFIGURED = False
+app.dogfood_action_service = lambda orchestration_module=None: fake_actions
+headers = {"authorization": "Bearer session-1", "content-type": "application/json", "idempotency-key": "idem-1"}
+create_body = {
+    "provider": "google_docs",
+    "resourceId": "doc_001",
+    "resourceRevision": "rev_001",
+    "targetRange": {"start": 0, "end": 4},
+    "originalTextHash": "sha256:original",
+    "actionType": "replace_text",
+    "payload": {"proposedText": "safe replacement"},
+}
+requests = [
+    ("POST", "/resource-sessions/session_001/actions", create_body),
+    ("GET", "/resource-sessions/session_001/actions", None),
+    ("GET", "/resource-sessions/session_001/actions/action_001", {"resourceId": "doc_001"}),
+    ("POST", "/resource-sessions/session_001/actions/action_001/approve", {"resourceId": "doc_001"}),
+    ("POST", "/resource-sessions/session_001/actions/action_001/reject", {"resourceId": "doc_001"}),
+    ("POST", "/resource-sessions/session_001/apply-action", {"actionId": "action_001", "resourceId": "doc_001"}),
+]
+statuses = []
+for method, path, body in requests:
+    response = app.handle_http_request(
+        method=method,
+        path=path,
+        headers=headers,
+        body=None if body is None else json.dumps(body).encode("utf-8"),
+    )
+    statuses.append(response["status"])
+assert statuses == [201, 200, 200, 200, 200, 200], statuses
+assert [call[0] for call in fake_actions.calls] == ["create", "list", "get", "approve", "reject", "apply"], fake_actions.calls
+apply_call = fake_actions.calls[-1][2]
+assert apply_call["idempotencyKey"] == "idem-1", apply_call
+assert all(call[1]["tenantId"] == "tenant_001" and call[1]["userId"] == "user_001" for call in fake_actions.calls), fake_actions.calls
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-orchestration-service/src")
+      ].join(path.delimiter)
     },
     encoding: "utf8"
   });
@@ -198,6 +472,108 @@ assert result["X-Ai-Assist-User-Id"] == "trusted-user", result
 assert result["X-Ai-Assist-Auth-Subject"] == "trusted-subject", result
 assert result["x-request-id"] == "req-1", result
 assert "x-ai-assist-tenant-id" not in result, result
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime reports platform provider status as metadata only", () => {
+  const script = `
+import json
+import os
+import ai_assist_dogfood_runtime.http_app as app
+class Codec:
+    def verify_bearer(self, header):
+        assert header == "Bearer session-1", header
+        return {"session": "session-1"}
+class Identity:
+    def derive_identity(self, product_session):
+        return {"tenantId": "trusted-tenant", "userId": "trusted-user", "authSubject": "trusted-subject"}
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+app._AUTH_APP = AuthApp()
+os.environ["PLATFORM_PROVIDER_DEFAULT"] = "openai"
+os.environ["PLATFORM_PROVIDER_SECRET_REF_OPENAI"] = "openai-secret-ref"
+os.environ.pop("PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC", None)
+response = app.handle_http_request(
+    method="GET",
+    path="/providers",
+    headers={
+        "authorization": "Bearer session-1",
+        "x-ai-assist-tenant-id": "caller-tenant",
+        "x-ai-assist-user-id": "caller-user",
+        "x-request-id": "req-providers",
+        "x-correlation-id": "corr-providers",
+    },
+)
+payload = json.loads(response["body"].decode("utf-8"))
+assert response["status"] == 200, response
+assert response["headers"]["Cache-Control"] == "no-store", response
+assert payload["requestId"] == "req-providers", payload
+assert payload["correlationId"] == "corr-providers", payload
+assert payload["data"]["defaultProvider"] == "openai", payload
+providers = {item["provider"]: item for item in payload["data"]["providers"]}
+assert providers["openai"]["available"] is True, payload
+assert providers["openai"]["default"] is True, payload
+assert providers["anthropic"]["status"] == "not_configured", payload
+assert "openai-secret-ref" not in json.dumps(payload), payload
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-orchestration-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime injects platform provider access into orchestration command bodies", () => {
+  const script = `
+import json
+import os
+import ai_assist_dogfood_runtime.http_app as app
+os.environ["PLATFORM_PROVIDER_DEFAULT"] = "openai"
+os.environ["PLATFORM_PROVIDER_SECRET_REF_OPENAI"] = "openai-secret-ref"
+body = app.dogfood_orchestration_body(
+    "POST",
+    "/resource-sessions/session-1/commands",
+    json.dumps({
+        "prompt": "do not log me",
+        "tenantId": "caller-tenant",
+        "userId": "caller-user",
+    }).encode("utf-8"),
+)
+payload = json.loads(body.decode("utf-8"))
+assert payload["provider"] == "openai", payload
+assert payload["providerAccess"] == {"source": "platform", "reference": "openai-secret-ref"}, payload
+assert payload["tenantId"] == "caller-tenant", payload
+assert payload["userId"] == "caller-user", payload
+byo = app.dogfood_orchestration_body(
+    "POST",
+    "/resource-sessions/session-1/commands",
+    json.dumps({
+        "provider": "openai",
+        "providerAccess": {"source": "byo", "credential": "sk-raw", "secretRef": "secret-1"},
+    }).encode("utf-8"),
+)
+byo_payload = json.loads(byo.decode("utf-8"))
+assert byo_payload["providerAccess"] == {"source": "byo", "secretRef": "secret-1"}, byo_payload
+assert "sk-raw" not in json.dumps(byo_payload), byo_payload
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: process.cwd(),
@@ -496,7 +872,9 @@ test("defines canonical M9 auth OAuth resource action and SSE route contract", (
     "GET /context-modes",
     "PUT /resource-sessions/{sessionId}/context-mode",
     "POST /resource-sessions/{sessionId}/context-preview",
+    "POST /resource-sessions/{sessionId}/actions",
     "GET /resource-sessions/{sessionId}/actions",
+    "GET /resource-sessions/{sessionId}/actions/{actionId}",
     "POST /resource-sessions/{sessionId}/actions/{actionId}/approve",
     "POST /resource-sessions/{sessionId}/actions/{actionId}/reject",
     "POST /resource-sessions/{sessionId}/apply-action"
