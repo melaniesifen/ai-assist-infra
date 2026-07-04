@@ -566,6 +566,7 @@ exports.handler = async (event) => {
       APP_ENV: deploymentTarget.environmentName,
       AWS_REGION: deploymentTarget.region,
       WEB_APP_BASE_URL: deploymentConfig.webAppBaseUrl,
+      ALLOWED_ORIGINS: deploymentConfig.webAppBaseUrl,
       API_BASE_URL: apiBaseUrl,
       SSE_BASE_URL: `https://${deploymentConfig.sseDomainName}`,
       TRUSTED_USER_MODE: "true",

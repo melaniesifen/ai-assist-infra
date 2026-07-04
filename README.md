@@ -182,6 +182,8 @@ bootstrap mode it can be a stable local subject such as `trusted-user:dev-user`.
 `WebAppBaseUrl` is injected as `WEB_APP_BASE_URL` and should be the HTTPS origin
 where the target's web app is hosted, for example
 `https://dev.example.test` for dev dogfood.
+`ALLOWED_ORIGINS` is derived from `WebAppBaseUrl` for dogfood and injected into
+the runtime to keep CORS/redirect origin checks aligned with the web app URL.
 `API_BASE_URL` is not a local context value; CDK derives it from the generated
 HTTP API endpoint and injects it into the dogfood runtime.
 `SSE_BASE_URL` is also derived by CDK from `SseDomainName` and injected into the
