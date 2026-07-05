@@ -742,6 +742,85 @@ assert app.dogfood_context_consent_grant(wrong_resource, "grant-1") is None
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
+test("dogfood orchestration context dependency resolves only after matching consent exists", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+
+grant = {
+    "grantId": "grant-1",
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "provider": "google_docs",
+    "contextMode": "ACTIVE_RESOURCE",
+    "resourceRef": {"provider": "google_docs", "resourceId": "doc-1"},
+    "scopes": ["docs.read"],
+    "status": "active",
+    "grantedAt": "2026-05-29T11:00:00.000Z",
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+}
+
+def fake_consent(request, _grant_id):
+    if request["resourceRef"]["resourceId"] == "doc-1":
+        return grant
+    return None
+
+def fake_read_context(request):
+    return {
+        "context": {
+            "contextId": "ctx-1",
+            "tenantId": request["tenantId"],
+            "userId": request["userId"],
+            "sessionId": request["sessionId"],
+            "provider": "google_docs",
+            "resourceRef": request["resourceRef"],
+            "contextMode": request["contextMode"],
+            "connector": "google_docs",
+            "content": "redacted test content",
+            "resourceRevision": "rev-1",
+            "anchors": {},
+            "connectorVerified": True,
+        },
+        "resourceRevision": "rev-1",
+    }
+
+app.dogfood_context_consent_grant = fake_consent
+app.dogfood_google_docs_read_context = fake_read_context
+dependency = app.DogfoodContextDependency()
+resolved = dependency.resolve_context({
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "sessionId": "session-1",
+    "resourceId": "doc-1",
+    "contextMode": "ACTIVE_RESOURCE",
+})
+assert resolved["authorized"] is True
+assert resolved["resourceRef"]["resourceId"] == "doc-1"
+assert resolved["resourceRevision"] == "rev-1"
+missing = dependency.resolve_context({
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "sessionId": "session-1",
+    "resourceId": "doc-2",
+    "contextMode": "ACTIVE_RESOURCE",
+})
+assert missing["authorized"] is False
+assert missing["reasonCode"] == "CONTEXT_UNAVAILABLE"
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-context-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test("parses local deployment config from CDK context without exposing secrets", () => {
   const config = parseDeploymentConfigContext(
     {
@@ -1154,6 +1233,7 @@ test("defines canonical M9 auth OAuth resource action and SSE route contract", (
     "GET /context-modes",
     "PUT /resource-sessions/{sessionId}/context-mode",
     "POST /resource-sessions/{sessionId}/context-preview",
+    "POST /resource-sessions/{sessionId}/context-consent",
     "POST /resource-sessions/{sessionId}/actions",
     "GET /resource-sessions/{sessionId}/actions",
     "GET /resource-sessions/{sessionId}/actions/{actionId}",

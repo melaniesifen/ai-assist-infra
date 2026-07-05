@@ -69,6 +69,7 @@ ROUTES: tuple[RouteDispatch, ...] = (
     route("GET", r"^/context-modes$", "ai-assist-context-service", "ai_assist_context_service"),
     route("PUT", r"^/resource-sessions/[^/]+/context-mode$", "ai-assist-context-service", "ai_assist_context_service"),
     route("POST", r"^/resource-sessions/[^/]+/context-preview$", "ai-assist-context-service", "ai_assist_context_service"),
+    route("POST", r"^/resource-sessions/[^/]+/context-consent$", "ai-assist-context-service", "ai_assist_context_service"),
     route("POST", r"^/resource-sessions/[^/]+/actions$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
     route("GET", r"^/resource-sessions/[^/]+/actions$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
     route("GET", r"^/resource-sessions/[^/]+/actions/[^/]+$", "ai-assist-orchestration-service", "ai_assist_orchestration"),
@@ -269,6 +270,8 @@ def dogfood_context_app() -> Any:
         _CONTEXT_APP = http_module.ContextHttpApplication(
             connector_read_context=dogfood_google_docs_read_context,
             load_consent_grant=dogfood_context_consent_grant,
+            consent_grant_repository=dogfood_context_consent_repository(),
+            require_google_oauth=dogfood_require_google_oauth,
         )
     return _CONTEXT_APP
 
@@ -330,10 +333,13 @@ class DogfoodContextDependency:
         grant = dogfood_context_consent_grant(context_request, None)
         if grant is not None:
             context_request["consentGrant"] = grant
-        result = importlib.import_module("ai_assist_context_service.read_path").read_context_with_consent(
-            context_request,
-            dogfood_google_docs_read_context,
-        )
+        try:
+            result = importlib.import_module("ai_assist_context_service.read_path").read_context_with_consent(
+                context_request,
+                dogfood_google_docs_read_context,
+            )
+        except Exception:
+            return {"authorized": False, "reasonCode": "CONTEXT_UNAVAILABLE"}
         context = result.get("context") if isinstance(result, dict) else None
         if not isinstance(context, dict):
             return {"authorized": False, "reasonCode": "CONTEXT_UNAVAILABLE"}
@@ -782,6 +788,30 @@ def dogfood_context_consent_grant(request: dict[str, Any], consent_grant_id: str
     if consent_grant_id and grant.get("grantId") != consent_grant_id:
         return None
     return grant
+
+
+def dogfood_require_google_oauth(request: dict[str, Any]) -> None:
+    token_status = AuthGoogleTokenProvider(dogfood_auth_app()).get_access_token(
+        {
+            **request,
+            "operation": "contextConsent",
+            "requiredScopes": ["https://www.googleapis.com/auth/documents.readonly"],
+        }
+    )
+    if token_status.get("accessToken") or token_status.get("status") == "available":
+        return
+    context_module = importlib.import_module("ai_assist_context_service")
+    raise context_module.ContextServiceError(
+        "GOOGLE_OAUTH_REQUIRED",
+        "Connect Google before granting document context.",
+        http_status=403,
+        category="AUTHORIZATION",
+        details={
+            "provider": "google",
+            "reconnectRequired": bool(token_status.get("reconnectRequired")),
+            "refreshRequired": bool(token_status.get("refreshRequired")),
+        },
+    )
 
 
 def dogfood_google_docs_read_context(request: dict[str, Any]) -> dict[str, Any]:

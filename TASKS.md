@@ -99,6 +99,12 @@ Relevant LLDs:
 - [x] M11-T5.3 sidebar Google OAuth infra slice: include the target's
   CDK-owned extension callback URLs in auth-service `ALLOWED_ORIGINS` so
   `/oauth/google/start` can validate an extension identity `redirectTarget`.
+- [x] M12-T6 infra slice: add the authenticated
+  `POST /resource-sessions/{sessionId}/context-consent` route to the canonical
+  route inventory and shared dogfood runtime dispatcher, wire it to
+  `ContextConsentGrants` through `CONSENT_GRANT_TABLE_NAME`, and require Google
+  OAuth availability before grant creation. Deployed live proof still requires
+  redeploy plus approved Google OAuth and controlled document configuration.
 
 ## Future Production Tasks
 

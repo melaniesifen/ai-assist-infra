@@ -61,6 +61,7 @@ export const SERVICE_ROUTES: readonly ServiceRoute[] = Object.freeze([
   route("GET", "/context-modes", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("PUT", "/resource-sessions/{sessionId}/context-mode", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("POST", "/resource-sessions/{sessionId}/context-preview", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.EXPENSIVE),
+  route("POST", "/resource-sessions/{sessionId}/context-consent", SERVICES.CONTEXT, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("POST", "/resource-sessions/{sessionId}/actions", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.MUTATION),
   route("GET", "/resource-sessions/{sessionId}/actions", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
   route("GET", "/resource-sessions/{sessionId}/actions/{actionId}", SERVICES.ORCHESTRATION, ROUTE_RATE_LIMIT_TIERS.USER_STANDARD),
