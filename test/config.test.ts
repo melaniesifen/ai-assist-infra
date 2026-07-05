@@ -133,6 +133,30 @@ test("dogfood runtime source hash changes when service source changes", () => {
   assert.equal(buildDogfoodRuntimeSourceHash(workspaceRoot, runtimeRoot), afterServiceChange);
 });
 
+test("dogfood runtime source hash changes when shared python wrapper changes", () => {
+  const workspaceRoot = mkdtempSync(path.join(tmpdir(), "ai-assist-hash-wrapper-"));
+  const runtimeRoot = path.join(workspaceRoot, "ai-assist-infra", "docker", "dogfood-runtime");
+  const pythonServiceRoot = path.join(workspaceRoot, "ai-assist-infra", "docker", "python-service");
+  mkdirSync(path.join(runtimeRoot, "ai_assist_dogfood_runtime"), { recursive: true });
+  mkdirSync(pythonServiceRoot, { recursive: true });
+  writeFileSync(path.join(runtimeRoot, "Dockerfile"), "FROM scratch\n");
+  writeFileSync(path.join(runtimeRoot, "ai_assist_dogfood_runtime", "__init__.py"), "\n");
+  writeFileSync(path.join(pythonServiceRoot, "health_server.py"), "VERSION = 1\n");
+
+  for (const asset of PYTHON_SERVICE_CONTAINER_ASSETS) {
+    const serviceRoot = path.join(workspaceRoot, asset.sourceDirectory);
+    mkdirSync(path.join(serviceRoot, "src", asset.pythonPackage), { recursive: true });
+    writeFileSync(path.join(serviceRoot, "pyproject.toml"), `[project]\nname = "${asset.sourceDirectory}"\n`);
+    writeFileSync(path.join(serviceRoot, "src", asset.pythonPackage, "__init__.py"), "\n");
+  }
+
+  const before = buildDogfoodRuntimeSourceHash(workspaceRoot, runtimeRoot);
+  writeFileSync(path.join(pythonServiceRoot, "health_server.py"), "VERSION = 2\n");
+  const after = buildDogfoodRuntimeSourceHash(workspaceRoot, runtimeRoot);
+
+  assert.notEqual(after, before);
+});
+
 test("dogfood runtime dispatcher delegates the SSE route to the session-events runtime", () => {
   const script = `
 import ai_assist_dogfood_runtime.http_app as app
@@ -304,6 +328,69 @@ assert open_log["userId"] == "user_001", open_log
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
+test("dogfood runtime derives session-events identity from Cognito-shaped bearer", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+from ai_assist_session_events import http_app as events
+events.reset_runtime_for_tests()
+class Codec:
+    def verify_bearer(self, header):
+        raise AssertionError("SSE must use auth app product session resolution")
+class Identity:
+    def derive_identity(self, product_session):
+        assert product_session == {"audience": "product", "authSubject": "cognito-subject-a"}, product_session
+        return {"tenantId": "tenant_001", "userId": "user_001", "authSubject": "cognito-subject-a"}
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+    def _product_session(self, headers):
+        assert headers["authorization"] == "Bearer cognito.jwt.token", headers
+        return {"audience": "product", "authSubject": "cognito-subject-a"}
+app._AUTH_APP = AuthApp()
+events.publish_session_event({
+    "eventId": "evt_001",
+    "tenantId": "tenant_001",
+    "userId": "user_001",
+    "sessionId": "session_001",
+    "requestId": "req_001",
+    "correlationId": "corr_001",
+    "type": "progress",
+    "sequence": 1,
+    "createdAt": "2026-05-29T00:00:00.000Z",
+    "payload": {"stage": "context.loading", "status": "started", "messageCode": "CONTEXT_LOADING"},
+})
+response = app.handle_http_request(
+    method="GET",
+    path="/sessions/session_001/events",
+    headers={
+        "authorization": "Bearer cognito.jwt.token",
+        "x-ai-assist-tenant-id": "attacker-tenant",
+        "X-Ai-Assist-User-Id": "attacker-user",
+    },
+)
+assert response["status"] == 200, response
+assert response["headers"]["Content-Type"] == "text/event-stream; charset=utf-8", response
+chunk = response["stream"].pop_pending()[0]
+assert chunk.startswith("id: evt_001\\n"), chunk
+open_log = events.stream_log_records()[0]
+assert open_log["tenantId"] == "tenant_001", open_log
+assert open_log["userId"] == "user_001", open_log
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-session-events-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test("shared python HTTP wrapper preserves streaming responses without content length", () => {
   const wrapper = readFileSync(path.join(process.cwd(), "docker/python-service/health_server.py"), "utf8");
 
@@ -311,6 +398,45 @@ test("shared python HTTP wrapper preserves streaming responses without content l
   assert.match(wrapper, /stream\.pop_pending\(\)/);
   assert.match(wrapper, /stream\.heartbeat\(\)/);
   assert.match(wrapper, /close\(disconnect_reason="client_disconnect"\)/);
+});
+
+test("shared python HTTP wrapper handles CORS preflight for authorized browser SSE", () => {
+  const wrapper = readFileSync(path.join(process.cwd(), "docker/python-service/health_server.py"), "utf8");
+
+  assert.match(wrapper, /def do_OPTIONS\(self\)/);
+  assert.match(wrapper, /Access-Control-Allow-Methods/);
+  assert.match(wrapper, /Access-Control-Allow-Headers/);
+  assert.match(wrapper, /last-event-id/);
+  assert.match(wrapper, /def _write_cors_headers\(self\)/);
+  assert.match(wrapper, /Access-Control-Allow-Origin/);
+  assert.match(wrapper, /moz-extension:\/\//);
+  assert.match(wrapper, /chrome-extension:\/\//);
+});
+
+test("shared python HTTP wrapper keeps streaming loop in the stream writer", () => {
+  const script = `
+import inspect
+from health_server import Handler
+
+stream_source = inspect.getsource(Handler._write_stream_response)
+cors_source = inspect.getsource(Handler._write_cors_headers)
+
+assert "stream.pop_pending()" in stream_source, stream_source
+assert "stream.heartbeat()" in stream_source, stream_source
+assert "disconnect_reason=\\\"client_disconnect\\\"" in stream_source, stream_source
+assert "stream.pop_pending()" not in cors_source, cors_source
+assert "stream.heartbeat()" not in cors_source, cors_source
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(process.cwd(), "docker/python-service")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
 test("dogfood runtime dispatcher normalizes lambda-style package responses", () => {
@@ -1026,6 +1152,163 @@ missing = dependency.resolve_context({
 })
 assert missing["authorized"] is False
 assert missing["reasonCode"] == "CONTEXT_UNAVAILABLE"
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-context-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime treats full Google Docs scope as sufficient for read-only context", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+
+grant = {
+    "grantId": "grant-1",
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "provider": "google_docs",
+    "contextMode": "ACTIVE_RESOURCE",
+    "resourceRef": {"provider": "google_docs", "resourceId": "doc-1"},
+    "scopes": ["docs.read"],
+    "status": "active",
+    "grantedAt": "2026-05-29T11:00:00.000Z",
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+}
+
+class TokenProvider:
+    def __init__(self, _auth_app):
+        pass
+    def get_access_token(self, request):
+        return {
+            "status": "active",
+            "accessToken": "token-1",
+            "scopes": ["https://www.googleapis.com/auth/documents"],
+            "requiredScopes": request["requiredScopes"],
+        }
+
+class GoogleClient:
+    def get_document(self, input_):
+        return {
+            "documentId": input_["documentId"],
+            "revisionId": "rev-1",
+            "text": "Alpha beta",
+        }
+
+app.dogfood_context_consent_grant = lambda _request, _grant_id: grant
+app.dogfood_auth_app = lambda: object()
+app.AuthGoogleTokenProvider = TokenProvider
+app.dogfood_google_docs_app = lambda: type("GoogleDocsApp", (), {
+    "adapter": app.importlib.import_module("ai_assist_google_docs_adapter.adapter").GoogleDocsAdapter(
+        google_client=GoogleClient(),
+        token_provider=TokenProvider(object()),
+    )
+})()
+dependency = app.DogfoodContextDependency()
+resolved = dependency.resolve_context({
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "sessionId": "session-1",
+    "resourceId": "doc-1",
+    "contextMode": "ACTIVE_RESOURCE",
+})
+assert resolved["authorized"] is True
+assert resolved["content"] == "Alpha beta"
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-context-service/src"),
+        path.join(process.cwd(), "../ai-assist-google-docs-adapter/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood orchestration context dependency logs safe exception metadata", () => {
+  const script = `
+import contextlib
+import io
+import json
+
+import ai_assist_dogfood_runtime.http_app as app
+
+grant = {
+    "grantId": "grant-1",
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "provider": "google_docs",
+    "contextMode": "ACTIVE_RESOURCE",
+    "resourceRef": {"provider": "google_docs", "resourceId": "doc-secret-123"},
+    "scopes": ["docs.read"],
+    "status": "active",
+    "grantedAt": "2026-05-29T11:00:00.000Z",
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+}
+
+class SafeAdapterError(Exception):
+    code = "PERMISSION_DENIED"
+    http_status = 403
+    category = "AUTHORIZATION"
+    retryable = False
+    details = {
+        "operation": "readContext",
+        "resourceId": "doc-secret-123",
+        "provider": "google_docs",
+        "token": "ya29.secret-token",
+    }
+
+    def __init__(self):
+        self.message = "Google authorization failed for documents/doc-secret-123 with Bearer token"
+        super().__init__(self.message)
+
+def fake_consent(_request, _grant_id):
+    return grant
+
+def fake_read_context(_request):
+    raise SafeAdapterError()
+
+app.dogfood_context_consent_grant = fake_consent
+app.dogfood_google_docs_read_context = fake_read_context
+dependency = app.DogfoodContextDependency()
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    result = dependency.resolve_context({
+        "tenantId": "tenant-1",
+        "userId": "user-1",
+        "sessionId": "session-1",
+        "resourceId": "doc-secret-123",
+        "contextMode": "ACTIVE_RESOURCE",
+    })
+
+assert result == {"authorized": False, "reasonCode": "CONTEXT_UNAVAILABLE"}
+log = output.getvalue()
+payload = json.loads(log)
+assert payload["event"] == "dogfood.context.resolve.exception"
+assert payload["exceptionType"] == "SafeAdapterError"
+assert payload["code"] == "PERMISSION_DENIED"
+assert payload["httpStatus"] == 403
+assert payload["details"] == {"operation": "readContext", "provider": "google_docs"}
+assert payload["hasResourceId"] is True
+assert payload["grantPresent"] is True
+assert "doc-secret-123" not in log
+assert "ya29.secret-token" not in log
+assert "Bearer token" not in log
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: process.cwd(),

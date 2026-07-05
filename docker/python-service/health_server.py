@@ -14,6 +14,8 @@ PYTHON_PACKAGE = os.environ.get("PYTHON_PACKAGE", "")
 SERVICE_PORT = int(os.environ.get("SERVICE_PORT", "8080"))
 SSE_HEARTBEAT_SECONDS = int(os.environ.get("SSE_HEARTBEAT_SECONDS", "25"))
 SSE_POLL_SECONDS = 0.25
+ALLOWED_CORS_HEADERS = "authorization,content-type,last-event-id,x-correlation-id,x-request-id"
+ALLOWED_CORS_METHODS = "DELETE,GET,OPTIONS,POST,PUT"
 _SERVICE_HTTP_HANDLER = None
 
 
@@ -37,6 +39,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         self._handle()
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self._write_cors_headers()
+        self.send_header("Access-Control-Allow-Methods", ALLOWED_CORS_METHODS)
+        self.send_header("Access-Control-Allow-Headers", self.headers.get("Access-Control-Request-Headers", ALLOWED_CORS_HEADERS))
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _handle(self) -> None:
         parsed = urlparse(self.path)
@@ -122,6 +133,7 @@ class Handler(BaseHTTPRequestHandler):
             body = body.encode("utf-8")
         status_code = int(response.get("status", 500))
         self.send_response(status_code)
+        self._write_cors_headers()
         for key, value in response.get("headers", {}).items():
             self.send_header(key, str(value))
         self.send_header("Content-Length", str(len(body)))
@@ -131,6 +143,7 @@ class Handler(BaseHTTPRequestHandler):
     def _write_stream_response(self, response: dict[str, Any], stream: Any) -> None:
         status_code = int(response.get("status", 500))
         self.send_response(status_code)
+        self._write_cors_headers()
         for key, value in response.get("headers", {}).items():
             self.send_header(key, str(value))
         self.end_headers()
@@ -154,6 +167,13 @@ class Handler(BaseHTTPRequestHandler):
             if callable(close):
                 close(disconnect_reason="client_disconnect")
 
+    def _write_cors_headers(self) -> None:
+        origin = self.headers.get("Origin")
+        if not origin or not origin_allowed(origin):
+            return
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Vary", "Origin")
+
 
 def main() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", SERVICE_PORT), Handler)
@@ -171,6 +191,23 @@ def service_http_handler() -> Any:
     except Exception:
         _SERVICE_HTTP_HANDLER = False
     return _SERVICE_HTTP_HANDLER or None
+
+
+def origin_allowed(origin: str) -> bool:
+    normalized_origin = origin.strip().rstrip("/")
+    if not normalized_origin:
+        return False
+    if normalized_origin.startswith(("chrome-extension://", "moz-extension://")):
+        return True
+    return normalized_origin in allowed_origins()
+
+
+def allowed_origins() -> set[str]:
+    return {
+        origin.strip().rstrip("/")
+        for origin in os.environ.get("ALLOWED_ORIGINS", "").split(",")
+        if origin.strip()
+    }
 
 
 def _encode_chunk(chunk: Any) -> bytes:

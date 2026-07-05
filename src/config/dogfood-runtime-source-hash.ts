@@ -9,8 +9,10 @@ const IGNORED_FILE_SUFFIXES = [".pyc", ".pyo", ".DS_Store"];
 
 export function buildDogfoodRuntimeSourceHash(workspaceRoot: string, runtimeDockerContext: string): string {
   const hash = createHash("sha256");
+  const pythonServiceDockerContext = path.join(workspaceRoot, "ai-assist-infra", "docker", "python-service");
   const entries = [
     ...collectFiles(runtimeDockerContext, runtimeDockerContext).map((entry) => scopedEntry("runtime", entry)),
+    ...collectFiles(pythonServiceDockerContext, pythonServiceDockerContext).map((entry) => scopedEntry("python-service", entry)),
     ...PYTHON_SERVICE_CONTAINER_ASSETS.flatMap((asset) => {
       const serviceRoot = path.join(workspaceRoot, asset.sourceDirectory);
       return INCLUDED_SERVICE_PATHS.flatMap((includedPath) => {

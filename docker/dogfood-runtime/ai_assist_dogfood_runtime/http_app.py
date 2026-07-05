@@ -40,6 +40,25 @@ COMMAND_ROUTE_RE = re.compile(r"^/resource-sessions/[^/]+/commands$")
 ACTION_DEPENDENCY_ENV_KEYS = ("PROPOSED_ACTION_TABLE_NAME", "APP_KMS_KEY_ID")
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_PROVIDER_TIMEOUT_SECONDS = 30
+SAFE_LOG_DETAIL_KEYS = {
+    "category",
+    "dependency",
+    "dependencyStatus",
+    "field",
+    "operation",
+    "provider",
+    "reason",
+    "reconnectRequired",
+    "refreshRequired",
+    "status",
+    "target",
+}
+UNSAFE_LOG_PATTERNS = (
+    re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(r"ya29\.[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(r"sk-[A-Za-z0-9._-]+", re.IGNORECASE),
+    re.compile(r"documents/[^/?\s]+", re.IGNORECASE),
+)
 
 
 @dataclass(frozen=True)
@@ -345,7 +364,8 @@ class DogfoodContextDependency:
                 context_request,
                 dogfood_google_docs_read_context,
             )
-        except Exception:
+        except Exception as error:
+            log_context_dependency_exception(error, context_request, grant)
             return {"authorized": False, "reasonCode": "CONTEXT_UNAVAILABLE"}
         context = result.get("context") if isinstance(result, dict) else None
         if not isinstance(context, dict):
@@ -1409,7 +1429,7 @@ def provider_error_event(
 
 def session_events_auth_headers(headers: dict[str, str]) -> dict[str, str]:
     if header_value(headers, "authorization"):
-        product_session = dogfood_auth_app().product_session_codec.verify_bearer(header_value(headers, "authorization"))
+        product_session = dogfood_product_session(headers)
         identity = dogfood_auth_app().identity_service.derive_identity(product_session=product_session)
         sanitized = {
             key: value
@@ -1493,6 +1513,66 @@ def exception_response(error: Exception, service: str, path: str) -> dict[str, A
             sort_keys=True,
         ).encode("utf-8"),
     }
+
+
+def log_context_dependency_exception(error: Exception, request: dict[str, Any], grant: dict[str, Any] | None) -> None:
+    log_event = {
+        "event": "dogfood.context.resolve.exception",
+        "exceptionType": error.__class__.__name__,
+        "exceptionMessage": safe_log_string(getattr(error, "message", None) or str(error)),
+        "code": safe_log_string(getattr(error, "code", None)),
+        "httpStatus": safe_log_int(getattr(error, "http_status", getattr(error, "status", None))),
+        "category": safe_log_string(getattr(error, "category", None)),
+        "retryable": bool(getattr(error, "retryable", False)),
+        "details": safe_log_details(getattr(error, "details", {}) or {}),
+        "hasTenantId": bool(request.get("tenantId")),
+        "hasUserId": bool(request.get("userId")),
+        "hasSessionId": bool(request.get("sessionId")),
+        "hasResourceId": bool((request.get("resourceRef") or {}).get("resourceId")),
+        "contextMode": safe_log_string(request.get("contextMode")),
+        "provider": safe_log_string(request.get("provider")),
+        "grantPresent": grant is not None,
+        "grantStatus": safe_log_string((grant or {}).get("status")),
+    }
+    print(json.dumps(log_event, separators=(",", ":"), sort_keys=True), flush=True)
+
+
+def safe_log_details(details: Any) -> dict[str, Any]:
+    if not isinstance(details, dict):
+        return {}
+    return {
+        key: safe_log_value(value)
+        for key, value in details.items()
+        if key in SAFE_LOG_DETAIL_KEYS and safe_log_value(value) is not None
+    }
+
+
+def safe_log_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return safe_log_string(value)
+    return None
+
+
+def safe_log_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def safe_log_string(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    redacted = value[:240]
+    for pattern in UNSAFE_LOG_PATTERNS:
+        redacted = pattern.sub("[redacted]", redacted)
+    return redacted
 
 
 def normalize_package_response(response: dict[str, Any]) -> dict[str, Any]:
