@@ -5,6 +5,9 @@ import json
 import os
 import re
 import base64
+import socket
+import urllib.error
+import urllib.request
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -29,10 +32,14 @@ TRUSTED_UPSTREAM_SSE_HEADERS_ENV = "AI_ASSIST_TRUSTED_UPSTREAM_SSE_HEADERS"
 PLATFORM_PROVIDER_DEFAULT_ENV = "PLATFORM_PROVIDER_DEFAULT"
 PLATFORM_PROVIDER_AUDIT_MODE_ENV = "PLATFORM_PROVIDER_AUDIT_MODE"
 PLATFORM_PROVIDER_QUOTA_MODE_ENV = "PLATFORM_PROVIDER_QUOTA_MODE"
+PLATFORM_PROVIDER_OWNER_DEV_ENABLED_ENV = "PLATFORM_PROVIDER_OWNER_DEV_ENABLED"
+PLATFORM_PROVIDER_MODEL_PREFIX = "PLATFORM_PROVIDER_MODEL_"
 PLATFORM_PROVIDER_SECRET_REF_PREFIX = "PLATFORM_PROVIDER_SECRET_REF_"
 SUPPORTED_PLATFORM_PROVIDERS = ("openai", "anthropic")
 COMMAND_ROUTE_RE = re.compile(r"^/resource-sessions/[^/]+/commands$")
 ACTION_DEPENDENCY_ENV_KEYS = ("PROPOSED_ACTION_TABLE_NAME", "APP_KMS_KEY_ID")
+OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_PROVIDER_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -365,6 +372,24 @@ class DogfoodProviderDependency:
         self.provider = provider
 
     async def stream(self, request: dict[str, Any]) -> Any:
+        if not owner_dev_provider_enabled():
+            yield provider_error_event(
+                provider=self.provider,
+                code="DOGFOOD_OWNER_DEV_PROVIDER_DISABLED",
+                category="unavailable",
+                message="Owner/dev platform provider calls are disabled.",
+                dependency_status="disabled",
+            )
+            return
+        if not owner_dev_provider_allowed(request):
+            yield provider_error_event(
+                provider=self.provider,
+                code="DOGFOOD_OWNER_DEV_PROVIDER_OWNER_ONLY",
+                category="authorization",
+                message="Owner/dev platform provider calls are owner-only.",
+                dependency_status="owner_required",
+            )
+            return
         access = request.get("providerAccess") if isinstance(request.get("providerAccess"), dict) else {}
         reference = access.get("reference")
         if not isinstance(reference, str) or not reference.strip():
@@ -376,13 +401,72 @@ class DogfoodProviderDependency:
                 dependency_status="not_configured",
             )
             return
-        yield provider_error_event(
-            provider=self.provider,
-            code="DOGFOOD_PROVIDER_CALLS_DISABLED",
-            category="unavailable",
-            message="Dogfood runtime provider calls require an explicit provider client hook.",
-            dependency_status="provider_client_not_configured",
-        )
+        model = provider_model(self.provider)
+        if model is None:
+            yield provider_error_event(
+                provider=self.provider,
+                code="PLATFORM_PROVIDER_MODEL_NOT_CONFIGURED",
+                category="unavailable",
+                message="Platform provider model is not configured.",
+                dependency_status="model_not_configured",
+            )
+            return
+        if self.provider != "openai":
+            yield provider_error_event(
+                provider=self.provider,
+                code="DOGFOOD_PROVIDER_CLIENT_UNAVAILABLE",
+                category="unavailable",
+                message="Dogfood runtime provider client is not configured for this provider.",
+                dependency_status="provider_client_not_configured",
+            )
+            return
+        messages = provider_messages(request)
+        if not messages:
+            yield provider_error_event(
+                provider=self.provider,
+                code="DOGFOOD_PROVIDER_MESSAGES_MISSING",
+                category="invalid_request",
+                message="Provider request messages are not available.",
+                dependency_status="malformed",
+            )
+            return
+        try:
+            credential = platform_provider_credential(reference)
+            result = openai_chat_client(credential).complete(
+                {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "maxOutputTokens": 700,
+                    "requestId": request.get("requestId"),
+                    "correlationId": request.get("correlationId"),
+                }
+            )
+        except ProviderClientError as error:
+            yield provider_error_event(
+                provider=self.provider,
+                code=error.code,
+                category=error.category,
+                message=error.safe_message,
+                dependency_status=error.dependency_status,
+                retry_after_seconds=error.retry_after_seconds,
+            )
+            return
+        assistant_text = result.get("content")
+        if isinstance(assistant_text, str) and assistant_text:
+            yield {
+                "type": "assistant.delta",
+                "provider": self.provider,
+                "model": result.get("model") or model,
+                "delta": assistant_text,
+            }
+        yield {
+            "type": "assistant.final",
+            "provider": self.provider,
+            "model": result.get("model") or model,
+            "finishReason": result.get("finishReason") or "stop",
+            "usage": result.get("usage"),
+        }
 
 
 class DogfoodProviderStatusService:
@@ -399,16 +483,18 @@ class AllowTrustedUserPolicy:
         }
 
 
-class MetadataOnlyPromptBuilder:
+class DogfoodReadOnlySummarizePromptBuilder:
     def build_prompt(self, request: dict[str, Any]) -> dict[str, Any]:
         command = request.get("command") if isinstance(request.get("command"), dict) else {}
         context = request.get("context") if isinstance(request.get("context"), dict) else {}
+        content = context.get("content")
         return {
             "messages": [
                 {
-                    "role": "user",
-                    "content": "Use the validated dogfood context to assist with the requested document workflow.",
-                }
+                    "role": "system",
+                    "content": "You are AI Assist in a Google Docs sidebar. Summarize the validated document context read-only. Do not propose document mutations.",
+                },
+                {"role": "user", "content": f"Summarize this Google Docs context:\n\n{content}"},
             ],
             "metadata": {
                 "sessionId": command.get("sessionId"),
@@ -416,6 +502,9 @@ class MetadataOnlyPromptBuilder:
                 "resourceProvider": context.get("provider") or "google_docs",
             },
         }
+
+
+MetadataOnlyPromptBuilder = DogfoodReadOnlySummarizePromptBuilder
 
 
 def dogfood_session_event_publisher() -> Any:
@@ -944,9 +1033,11 @@ def platform_provider_status_payload() -> dict[str, Any]:
 
 def provider_status(provider: str) -> dict[str, Any]:
     configured = provider_secret_ref(provider) is not None
+    model_configured = provider_model(provider) is not None
     quota_decision = platform_provider_quota_decision(provider)
     audit_decision = platform_provider_audit_decision(provider)
-    ready = configured and quota_decision["decision"] == "allow" and audit_decision["decision"] == "recorded"
+    owner_dev_enabled = owner_dev_provider_enabled()
+    ready = configured and model_configured and owner_dev_enabled and quota_decision["decision"] == "allow" and audit_decision["decision"] == "recorded"
     return {
         "provider": provider,
         "status": "available" if ready else "not_configured",
@@ -956,12 +1047,16 @@ def provider_status(provider: str) -> dict[str, Any]:
         "default": provider == default_platform_provider(),
         "quotaReady": quota_decision["decision"] == "allow",
         "auditReady": audit_decision["decision"] == "recorded",
+        "modelConfigured": model_configured,
+        "ownerDevEnabled": owner_dev_enabled,
         **(
             {}
             if ready
             else {
                 "reasonCode": provider_not_ready_reason(
                     configured=configured,
+                    model_configured=model_configured,
+                    owner_dev_enabled=owner_dev_enabled,
                     quota_decision=quota_decision,
                     audit_decision=audit_decision,
                 )
@@ -992,9 +1087,20 @@ def platform_provider_audit_decision(provider: str) -> dict[str, Any]:
     }
 
 
-def provider_not_ready_reason(*, configured: bool, quota_decision: dict[str, Any], audit_decision: dict[str, Any]) -> str:
+def provider_not_ready_reason(
+    *,
+    configured: bool,
+    model_configured: bool,
+    owner_dev_enabled: bool,
+    quota_decision: dict[str, Any],
+    audit_decision: dict[str, Any],
+) -> str:
     if not configured:
         return "PLATFORM_PROVIDER_SECRET_REF_MISSING"
+    if not model_configured:
+        return "PLATFORM_PROVIDER_MODEL_NOT_CONFIGURED"
+    if not owner_dev_enabled:
+        return "DOGFOOD_OWNER_DEV_PROVIDER_DISABLED"
     if quota_decision.get("decision") != "allow":
         return str(quota_decision.get("reasonCode") or "PLATFORM_PROVIDER_QUOTA_NOT_CONFIGURED")
     if audit_decision.get("decision") != "recorded":
@@ -1006,6 +1112,42 @@ def provider_secret_ref(provider: str) -> str | None:
     value = os.environ.get(f"{PLATFORM_PROVIDER_SECRET_REF_PREFIX}{provider.upper()}")
     if isinstance(value, str) and value.strip():
         return value.strip()
+    return None
+
+
+def provider_model(provider: str) -> str | None:
+    value = os.environ.get(f"{PLATFORM_PROVIDER_MODEL_PREFIX}{provider.upper()}")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def owner_dev_provider_enabled() -> bool:
+    return os.environ.get(PLATFORM_PROVIDER_OWNER_DEV_ENABLED_ENV, "").strip().lower() == "true"
+
+
+def owner_dev_provider_allowed(request: dict[str, Any]) -> bool:
+    return allowed_product_user_role(request.get("tenantId"), request.get("userId")) == "owner"
+
+
+def allowed_product_user_role(tenant_id: Any, user_id: Any) -> str | None:
+    if not isinstance(tenant_id, str) or not isinstance(user_id, str):
+        return None
+    raw = os.environ.get("AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON")
+    if not raw:
+        return None
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("tenantId") == tenant_id and entry.get("userId") == user_id and entry.get("status") == "active":
+            role = entry.get("role")
+            return role if isinstance(role, str) else None
     return None
 
 
@@ -1025,17 +1167,243 @@ def normalize_provider_name(value: Any) -> str | None:
     return value.strip().lower()
 
 
-def provider_error_event(*, provider: str, code: str, category: str, message: str, dependency_status: str) -> dict[str, Any]:
+def platform_provider_credential(reference: str) -> str:
+    try:
+        response = boto3_client("secretsmanager").get_secret_value(SecretId=reference)
+    except Exception as error:
+        raise ProviderClientError(
+            code="PROVIDER_ACCESS_UNAVAILABLE",
+            category="unavailable",
+            safe_message="Platform provider access is temporarily unavailable.",
+            dependency_status="secret_unavailable",
+        ) from error
+    secret = response.get("SecretString")
+    if not isinstance(secret, str) or not secret.strip():
+        raise ProviderClientError(
+            code="INVALID_CREDENTIAL",
+            category="authentication",
+            safe_message="Provider credential is invalid or expired.",
+            dependency_status="invalid_secret",
+        )
+    credential = extract_provider_credential(secret)
+    if credential is None:
+        raise ProviderClientError(
+            code="INVALID_CREDENTIAL",
+            category="authentication",
+            safe_message="Provider credential is invalid or expired.",
+            dependency_status="invalid_secret",
+        )
+    return credential
+
+
+def extract_provider_credential(secret: str) -> str | None:
+    trimmed = secret.strip()
+    try:
+        parsed = json.loads(trimmed)
+    except json.JSONDecodeError:
+        return trimmed
+    if not isinstance(parsed, dict):
+        return None
+    for key in ("apiKey", "openaiApiKey", "credential", "secret", "value"):
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def openai_chat_client(credential: str) -> "OpenAiChatClient":
+    return OpenAiChatClient(credential=credential)
+
+
+def provider_messages(request: dict[str, Any]) -> list[dict[str, str]]:
+    prompt = request.get("prompt") if isinstance(request.get("prompt"), dict) else {}
+    messages = prompt.get("messages")
+    if not isinstance(messages, list):
+        return []
+    normalized = []
+    for message in messages:
+        if not isinstance(message, dict):
+            return []
+        role = message.get("role")
+        content = message.get("content")
+        if role not in {"system", "user", "assistant"} or not isinstance(content, str) or not content.strip():
+            return []
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
+class ProviderClientError(Exception):
+    def __init__(
+        self,
+        *,
+        code: str,
+        category: str,
+        safe_message: str,
+        dependency_status: str,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        super().__init__(safe_message)
+        self.code = code
+        self.category = category
+        self.safe_message = safe_message
+        self.dependency_status = dependency_status
+        self.retry_after_seconds = retry_after_seconds
+
+
+class OpenAiChatClient:
+    def __init__(self, *, credential: str, url: str = OPENAI_CHAT_COMPLETIONS_URL, timeout: int = OPENAI_PROVIDER_TIMEOUT_SECONDS) -> None:
+        self.credential = credential
+        self.url = url
+        self.timeout = timeout
+
+    def complete(self, request: dict[str, Any]) -> dict[str, Any]:
+        body = {
+            "model": request["model"],
+            "messages": request["messages"],
+            "temperature": request.get("temperature", 0.2),
+            "max_tokens": request.get("maxOutputTokens", 700),
+        }
+        http_request = urllib.request.Request(
+            self.url,
+            data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.credential}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(http_request, timeout=self.timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            raise normalize_provider_http_error(error) from error
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+            raise ProviderClientError(
+                code="PROVIDER_UNAVAILABLE",
+                category="unavailable",
+                safe_message="Provider is temporarily unavailable.",
+                dependency_status="unavailable",
+            ) from error
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ProviderClientError(
+                code="UNKNOWN_PROVIDER_ERROR",
+                category="unavailable",
+                safe_message="Provider request failed.",
+                dependency_status="malformed",
+            ) from error
+        if not isinstance(payload, dict):
+            raise ProviderClientError(
+                code="UNKNOWN_PROVIDER_ERROR",
+                category="unavailable",
+                safe_message="Provider request failed.",
+                dependency_status="malformed",
+            )
+        content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content")) if isinstance(payload.get("choices"), list) else None
+        return {
+            "model": payload.get("model") or request["model"],
+            "content": content if isinstance(content, str) else "",
+            "finishReason": ((payload.get("choices") or [{}])[0].get("finish_reason")) if isinstance(payload.get("choices"), list) else None,
+            "usage": normalize_openai_usage(payload.get("usage")),
+        }
+
+
+def normalize_provider_http_error(error: urllib.error.HTTPError) -> ProviderClientError:
+    retry_after = parse_retry_after(error.headers.get("Retry-After") if error.headers else None)
+    signal = provider_error_signal(error)
+    if error.code in {401, 403}:
+        return ProviderClientError(
+            code="INVALID_CREDENTIAL",
+            category="authentication",
+            safe_message="Provider credential is invalid or expired.",
+            dependency_status="invalid_credential",
+        )
+    if error.code == 429 and signal in {"insufficient_quota", "quota_exceeded", "billing_hard_limit_reached"}:
+        return ProviderClientError(
+            code="PROVIDER_QUOTA_EXCEEDED",
+            category="quota",
+            safe_message="Provider quota is exhausted.",
+            dependency_status="quota_exceeded",
+            retry_after_seconds=retry_after,
+        )
+    if error.code == 429:
+        return ProviderClientError(
+            code="PROVIDER_RATE_LIMITED",
+            category="rate_limited",
+            safe_message="Provider rate limit was reached.",
+            dependency_status="rate_limited",
+            retry_after_seconds=retry_after,
+        )
+    if error.code == 400:
+        return ProviderClientError(
+            code="PROVIDER_VALIDATION_ERROR",
+            category="invalid_request",
+            safe_message="Provider rejected the request shape.",
+            dependency_status="invalid_request",
+        )
+    return ProviderClientError(
+        code="PROVIDER_UNAVAILABLE" if error.code in {408, 500, 502, 503, 504, 529} else "UNKNOWN_PROVIDER_ERROR",
+        category="unavailable",
+        safe_message="Provider is temporarily unavailable." if error.code in {408, 500, 502, 503, 504, 529} else "Provider request failed.",
+        dependency_status="unavailable",
+        retry_after_seconds=retry_after,
+    )
+
+
+def provider_error_signal(error: urllib.error.HTTPError) -> str | None:
+    try:
+        payload = json.loads(error.read().decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw_error = payload.get("error")
+    if not isinstance(raw_error, dict):
+        return None
+    value = raw_error.get("code") or raw_error.get("type")
+    return str(value).lower() if value is not None else None
+
+
+def normalize_openai_usage(usage: Any) -> dict[str, int] | None:
+    if not isinstance(usage, dict):
+        return None
+    return {
+        "inputTokens": int(usage.get("prompt_tokens") or 0),
+        "outputTokens": int(usage.get("completion_tokens") or 0),
+        "totalTokens": int(usage.get("total_tokens") or 0),
+    }
+
+
+def parse_retry_after(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def provider_error_event(
+    *,
+    provider: str,
+    code: str,
+    category: str,
+    message: str,
+    dependency_status: str,
+    retry_after_seconds: int | None = None,
+) -> dict[str, Any]:
+    error = {
+        "code": code,
+        "category": category,
+        "message": message,
+        "retryable": category in {"quota", "rate_limited", "unavailable"},
+        "dependencyStatus": dependency_status,
+    }
+    if retry_after_seconds is not None:
+        error["retryAfterSeconds"] = retry_after_seconds
     return {
         "type": "error",
         "provider": provider,
-        "error": {
-            "code": code,
-            "category": category,
-            "message": message,
-            "retryable": False,
-            "dependencyStatus": dependency_status,
-        },
+        "error": error,
     }
 
 

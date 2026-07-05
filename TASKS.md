@@ -105,6 +105,13 @@ Relevant LLDs:
   `ContextConsentGrants` through `CONSENT_GRANT_TABLE_NAME`, and require Google
   OAuth availability before grant creation. Deployed live proof still requires
   redeploy plus approved Google OAuth and controlled document configuration.
+- [x] M12-T7 infra slice: replace the shared dogfood runtime's disabled
+  provider placeholder with an owner-only, disabled-by-default OpenAI client
+  hook for read-only summarize, guarded by `PLATFORM_PROVIDER_OWNER_DEV_ENABLED`,
+  `PLATFORM_PROVIDER_MODEL_OPENAI`, provider secret refs, quota/audit readiness,
+  and allowed-product-user owner role. Deterministic tests use fake context and
+  provider clients; live provider proof still requires explicit approval and
+  deployed config.
 
 ## Future Production Tasks
 

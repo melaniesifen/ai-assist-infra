@@ -523,6 +523,8 @@ class AuthApp:
 app._AUTH_APP = AuthApp()
 os.environ["PLATFORM_PROVIDER_DEFAULT"] = "openai"
 os.environ["PLATFORM_PROVIDER_SECRET_REF_OPENAI"] = "openai-secret-ref"
+os.environ["PLATFORM_PROVIDER_MODEL_OPENAI"] = "test-model"
+os.environ["PLATFORM_PROVIDER_OWNER_DEV_ENABLED"] = "true"
 os.environ["PLATFORM_PROVIDER_QUOTA_MODE"] = "enforced"
 os.environ["PLATFORM_PROVIDER_AUDIT_MODE"] = "metadata"
 os.environ.pop("PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC", None)
@@ -548,8 +550,194 @@ assert providers["openai"]["available"] is True, payload
 assert providers["openai"]["default"] is True, payload
 assert providers["openai"]["quotaReady"] is True, payload
 assert providers["openai"]["auditReady"] is True, payload
+assert providers["openai"]["modelConfigured"] is True, payload
+assert providers["openai"]["ownerDevEnabled"] is True, payload
 assert providers["anthropic"]["status"] == "not_configured", payload
 assert "openai-secret-ref" not in json.dumps(payload), payload
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-orchestration-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime keeps platform provider disabled by default", () => {
+  const script = `
+import json
+import os
+import ai_assist_dogfood_runtime.http_app as app
+os.environ["PLATFORM_PROVIDER_DEFAULT"] = "openai"
+os.environ["PLATFORM_PROVIDER_SECRET_REF_OPENAI"] = "openai-secret-ref"
+os.environ["PLATFORM_PROVIDER_MODEL_OPENAI"] = "test-model"
+os.environ["PLATFORM_PROVIDER_QUOTA_MODE"] = "enforced"
+os.environ["PLATFORM_PROVIDER_AUDIT_MODE"] = "metadata"
+os.environ.pop("PLATFORM_PROVIDER_OWNER_DEV_ENABLED", None)
+payload = app.platform_provider_status_payload()
+providers = {item["provider"]: item for item in payload["providers"]}
+assert providers["openai"]["available"] is False, payload
+assert providers["openai"]["reasonCode"] == "DOGFOOD_OWNER_DEV_PROVIDER_DISABLED", payload
+assert providers["openai"]["ownerDevEnabled"] is False, payload
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime routes owner read-only summarize through OpenAI client hook", () => {
+  const script = `
+import json
+import os
+import ai_assist_dogfood_runtime.http_app as app
+class Codec:
+    def verify_bearer(self, header):
+        assert header == "Bearer session-1", header
+        return {"session": "session-1"}
+class Identity:
+    def derive_identity(self, product_session):
+        return {"tenantId": "trusted-tenant", "userId": "owner-user", "authSubject": "owner-subject"}
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+class FakeContext:
+    def resolve_context(self, request):
+        return {
+            "authorized": True,
+            "tenantId": request["tenantId"],
+            "userId": request["userId"],
+            "sessionId": request["sessionId"],
+            "provider": "google_docs",
+            "contextMode": request["contextMode"],
+            "resourceRef": {"provider": "google_docs", "resourceId": request["resourceId"]},
+            "resourceRevision": "rev-1",
+            "content": "private document text must only reach provider request",
+            "provenance": {"connectorVerified": True, "resourceRevision": "rev-1"},
+        }
+captured = {}
+class FakeOpenAiClient:
+    def __init__(self, credential):
+        self.credential = credential
+    def complete(self, request):
+        captured["credential"] = self.credential
+        captured["request"] = request
+        return {
+            "model": request["model"],
+            "content": "Summary text",
+            "finishReason": "stop",
+            "usage": {"inputTokens": 11, "outputTokens": 3, "totalTokens": 14},
+        }
+app._AUTH_APP = AuthApp()
+app._ORCHESTRATION_CONFIGURED = False
+app.DogfoodContextDependency = lambda: FakeContext()
+app.platform_provider_credential = lambda reference: "sk-test-secret"
+app.openai_chat_client = lambda credential: FakeOpenAiClient(credential)
+os.environ["AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON"] = json.dumps([
+    {"authSubject": "owner-subject", "tenantId": "trusted-tenant", "userId": "owner-user", "role": "owner", "status": "active"}
+])
+os.environ["PLATFORM_PROVIDER_DEFAULT"] = "openai"
+os.environ["PLATFORM_PROVIDER_SECRET_REF_OPENAI"] = "openai-secret-ref"
+os.environ["PLATFORM_PROVIDER_MODEL_OPENAI"] = "test-model"
+os.environ["PLATFORM_PROVIDER_OWNER_DEV_ENABLED"] = "true"
+os.environ["PLATFORM_PROVIDER_QUOTA_MODE"] = "enforced"
+os.environ["PLATFORM_PROVIDER_AUDIT_MODE"] = "metadata"
+response = app.handle_http_request(
+    method="POST",
+    path="/resource-sessions/session-1/commands",
+    headers={"authorization": "Bearer session-1", "idempotency-key": "idem-1", "x-request-id": "req-1"},
+    body=json.dumps({"resourceId": "doc-1", "contextMode": "ACTIVE_RESOURCE"}).encode("utf-8"),
+)
+payload = json.loads(response["body"].decode("utf-8"))
+serialized = json.dumps(payload)
+assert response["status"] == 202, response
+assert payload["data"]["finishReason"] == "stop", payload
+assert captured["credential"] == "sk-test-secret", captured
+assert captured["request"]["model"] == "test-model", captured
+assert "private document text" in captured["request"]["messages"][1]["content"], captured
+assert "sk-test-secret" not in serialized, payload
+assert "private document text" not in serialized, payload
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: [
+        path.join(process.cwd(), "docker/dogfood-runtime"),
+        path.join(process.cwd(), "../ai-assist-orchestration-service/src")
+      ].join(path.delimiter)
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("dogfood runtime blocks non-owner platform provider spend", () => {
+  const script = `
+import json
+import os
+import ai_assist_dogfood_runtime.http_app as app
+class Codec:
+    def verify_bearer(self, header):
+        return {"session": "session-1"}
+class Identity:
+    def derive_identity(self, product_session):
+        return {"tenantId": "trusted-tenant", "userId": "member-user", "authSubject": "member-subject"}
+class AuthApp:
+    product_session_codec = Codec()
+    identity_service = Identity()
+class FakeContext:
+    def resolve_context(self, request):
+        return {
+            "authorized": True,
+            "tenantId": request["tenantId"],
+            "userId": request["userId"],
+            "sessionId": request["sessionId"],
+            "provider": "google_docs",
+            "contextMode": request["contextMode"],
+            "resourceRef": {"provider": "google_docs", "resourceId": request["resourceId"]},
+            "resourceRevision": "rev-1",
+            "content": "private document text",
+            "provenance": {"connectorVerified": True, "resourceRevision": "rev-1"},
+        }
+app._AUTH_APP = AuthApp()
+app._ORCHESTRATION_CONFIGURED = False
+app.DogfoodContextDependency = lambda: FakeContext()
+app.platform_provider_credential = lambda reference: (_ for _ in ()).throw(AssertionError("provider secret must not be read"))
+os.environ["AI_ASSIST_ALLOWED_PRODUCT_USERS_JSON"] = json.dumps([
+    {"authSubject": "member-subject", "tenantId": "trusted-tenant", "userId": "member-user", "role": "member", "status": "active"}
+])
+os.environ["PLATFORM_PROVIDER_DEFAULT"] = "openai"
+os.environ["PLATFORM_PROVIDER_SECRET_REF_OPENAI"] = "openai-secret-ref"
+os.environ["PLATFORM_PROVIDER_MODEL_OPENAI"] = "test-model"
+os.environ["PLATFORM_PROVIDER_OWNER_DEV_ENABLED"] = "true"
+os.environ["PLATFORM_PROVIDER_QUOTA_MODE"] = "enforced"
+os.environ["PLATFORM_PROVIDER_AUDIT_MODE"] = "metadata"
+response = app.handle_http_request(
+    method="POST",
+    path="/resource-sessions/session-1/commands",
+    headers={"authorization": "Bearer session-1", "idempotency-key": "idem-1"},
+    body=json.dumps({"resourceId": "doc-1", "contextMode": "ACTIVE_RESOURCE"}).encode("utf-8"),
+)
+payload = json.loads(response["body"].decode("utf-8"))
+serialized = json.dumps(payload)
+assert response["status"] == 403, response
+assert payload["error"]["code"] == "DOGFOOD_OWNER_DEV_PROVIDER_OWNER_ONLY", payload
+assert "private document text" not in serialized, payload
 `;
   const result = spawnSync("python3", ["-c", script], {
     cwd: process.cwd(),
