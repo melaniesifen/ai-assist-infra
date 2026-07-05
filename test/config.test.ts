@@ -843,6 +843,39 @@ else:
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
+test("dogfood context consent checks Google OAuth with read context handoff operation", () => {
+  const script = `
+import ai_assist_dogfood_runtime.http_app as app
+calls = []
+class Provider:
+    def __init__(self, _auth_app):
+        pass
+    def get_access_token(self, request):
+        calls.append(dict(request))
+        return {"status": "active", "accessToken": "token"}
+app.dogfood_auth_app = lambda: object()
+app.AuthGoogleTokenProvider = Provider
+app.dogfood_require_google_oauth({
+    "tenantId": "tenant-1",
+    "userId": "user-1",
+    "authSubject": "subject-1",
+    "resourceRef": {"provider": "google_docs", "resourceId": "doc-1"},
+})
+assert calls[0]["operation"] == "readContext", calls
+assert calls[0]["requiredScopes"] == ["https://www.googleapis.com/auth/documents.readonly"], calls
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(process.cwd(), "docker/dogfood-runtime")
+    },
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test("dogfood runtime loads context consent grants from DynamoDB and gates static emergency JSON", () => {
   const script = `
 import json

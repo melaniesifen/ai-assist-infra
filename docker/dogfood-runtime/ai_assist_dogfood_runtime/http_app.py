@@ -883,7 +883,7 @@ def dogfood_require_google_oauth(request: dict[str, Any]) -> None:
     token_status = AuthGoogleTokenProvider(dogfood_auth_app()).get_access_token(
         {
             **request,
-            "operation": "contextConsent",
+            "operation": "readContext",
             "requiredScopes": ["https://www.googleapis.com/auth/documents.readonly"],
         }
     )
