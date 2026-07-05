@@ -1052,6 +1052,8 @@ test("parses local deployment config from CDK context without exposing secrets",
   assert.equal(config.webAppBaseUrl, "https://dev.example.test");
   assert.equal(getWebAppDomainName(config.webAppBaseUrl), "dev.example.test");
   assert.equal(config.googleOAuthClientId, "dev-google-client-id.apps.googleusercontent.com");
+  assert.equal(config.platformProviderOwnerDevEnabled, false);
+  assert.equal(config.platformProviderModelOpenai, undefined);
   assert.deepEqual(config.productAuthHostedUiCallbackUrls, [
     "https://dev-extension.chromiumapp.org/",
     "https://dev-extension.extensions.allizom.org/"
@@ -1104,6 +1106,78 @@ test("parses local deployment config from CDK context without exposing secrets",
       "dev"
     ).allowedProductUsers.length,
     0
+  );
+  const ownerDevProviderConfig = parseDeploymentConfigContext(
+    {
+      dev: {
+        hostedZoneId: "Z1234567890ABC",
+        hostedZoneName: "example.test",
+        sseDomainName: "sse.dev.example.test",
+        productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+        edgeJwtAuthEnabled: true,
+        allowedProductUsers: [],
+        trustedUserTenantId: "dev-tenant",
+        trustedUserUserId: "dev-user",
+        trustedUserAuthSubject: "trusted-user:dev-user",
+        webAppBaseUrl: "https://dev.example.test",
+        googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com",
+        platformProviderOwnerDevEnabled: true,
+        platformProviderModelOpenai: "gpt-4.1-mini"
+      }
+    },
+    "dev"
+  );
+  assert.equal(ownerDevProviderConfig.platformProviderOwnerDevEnabled, true);
+  assert.equal(ownerDevProviderConfig.platformProviderModelOpenai, "gpt-4.1-mini");
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          dev: {
+            hostedZoneId: "Z1234567890ABC",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.dev.example.test",
+            productAuthHostedUiCallbackUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+            productAuthHostedUiLogoutUrls: ["https://dev-extension.chromiumapp.org/", "https://dev-extension.extensions.allizom.org/"],
+            edgeJwtAuthEnabled: true,
+            allowedProductUsers: [],
+            trustedUserTenantId: "dev-tenant",
+            trustedUserUserId: "dev-user",
+            trustedUserAuthSubject: "trusted-user:dev-user",
+            webAppBaseUrl: "https://dev.example.test",
+            googleOAuthClientId: "dev-google-client-id.apps.googleusercontent.com",
+            platformProviderOwnerDevEnabled: true
+          }
+        },
+        "dev"
+      ),
+    /platformProviderModelOpenai is required/
+  );
+  assert.throws(
+    () =>
+      parseDeploymentConfigContext(
+        {
+          gamma: {
+            hostedZoneId: "Z1234567890ABC",
+            hostedZoneName: "example.test",
+            sseDomainName: "sse.gamma.example.test",
+            productAuthHostedUiCallbackUrls: ["https://gamma-extension.chromiumapp.org/"],
+            productAuthHostedUiLogoutUrls: ["https://gamma-extension.chromiumapp.org/"],
+            edgeJwtAuthEnabled: true,
+            allowedProductUsers: [],
+            trustedUserTenantId: "gamma-tenant",
+            trustedUserUserId: "gamma-user",
+            trustedUserAuthSubject: "trusted-user:gamma-user",
+            webAppBaseUrl: "https://gamma.example.test",
+            googleOAuthClientId: "gamma-google-client-id.apps.googleusercontent.com",
+            platformProviderOwnerDevEnabled: true,
+            platformProviderModelOpenai: "gpt-4.1-mini"
+          }
+        },
+        "gamma"
+      ),
+    /platformProviderOwnerDevEnabled may be true only for dev/
   );
   assert.throws(() => parseDeploymentConfigContext({}, "dev"), new RegExp(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.dev is required`));
   assert.throws(

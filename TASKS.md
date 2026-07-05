@@ -112,6 +112,10 @@ Relevant LLDs:
   and allowed-product-user owner role. Deterministic tests use fake context and
   provider clients; live provider proof still requires explicit approval and
   deployed config.
+- [x] M12-T7 config closeout: expose the owner/dev provider hook through
+  dev-only deployment context fields, inject `PLATFORM_PROVIDER_OWNER_DEV_ENABLED`
+  and `PLATFORM_PROVIDER_MODEL_OPENAI` only when explicitly configured, and
+  reject the owner/dev switch outside dev.
 
 ## Future Production Tasks
 

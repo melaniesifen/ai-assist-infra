@@ -46,12 +46,19 @@ const TEST_DEPLOYMENT_CONFIG: TargetDeploymentConfig = {
   trustedUserUserId: "test-user",
   trustedUserAuthSubject: "trusted-user:test-user",
   webAppBaseUrl: "https://app.dev.example.test",
-  googleOAuthClientId: "test-google-client-id.apps.googleusercontent.com"
+  googleOAuthClientId: "test-google-client-id.apps.googleusercontent.com",
+  platformProviderOwnerDevEnabled: false
 };
 
 const TEST_DEV_EDGE_AUTH_DISABLED_CONFIG = {
   ...TEST_DEPLOYMENT_CONFIG,
   edgeJwtAuthEnabled: false
+};
+
+const TEST_OWNER_DEV_PROVIDER_CONFIG: TargetDeploymentConfig = {
+  ...TEST_DEPLOYMENT_CONFIG,
+  platformProviderOwnerDevEnabled: true,
+  platformProviderModelOpenai: "gpt-4.1-mini"
 };
 
 const TEST_PRODUCT_AUTH: ProductAuthResources = {
@@ -122,6 +129,15 @@ function testWebAppCertificate(app: cdk.App, target: DeploymentTarget): acm.ICer
     "ImportedWebAppCertificate",
     "arn:aws:acm:us-east-1:111111111111:certificate/test-web-app-certificate"
   );
+}
+
+function runtimeEnvironment(template: Template): Record<string, unknown> {
+  const resources = template.toJSON().Resources as Record<string, { readonly Type: string; readonly Properties?: { readonly ContainerDefinitions?: Array<{ readonly Environment?: Array<{ readonly Name: string; readonly Value: unknown }> }> } }>;
+  const taskDefinition = Object.values(resources).find((resource) => resource.Type === "AWS::ECS::TaskDefinition");
+  assert.ok(taskDefinition, "expected an ECS task definition");
+  const container = taskDefinition.Properties?.ContainerDefinitions?.[0];
+  assert.ok(container, "expected a task definition container");
+  return Object.fromEntries((container.Environment ?? []).map((entry) => [entry.Name, entry.Value]));
 }
 
 test("synthesizes distinct dev gamma and prod deployment targets", () => {
@@ -721,6 +737,15 @@ test("synthesizes one shared Fargate runtime with private API ALB and public SSE
     ])
   });
   assert.ok(JSON.stringify(template.toJSON()).includes("ai-assist:preserves-service-boundary-roles"));
+});
+
+test("owner dev provider hook environment is explicit opt-in", () => {
+  assert.equal(runtimeEnvironment(synthTemplate()).PLATFORM_PROVIDER_OWNER_DEV_ENABLED, undefined);
+  assert.equal(runtimeEnvironment(synthTemplate()).PLATFORM_PROVIDER_MODEL_OPENAI, undefined);
+
+  const enabledEnvironment = runtimeEnvironment(synthTemplateWithDeploymentConfig(TEST_OWNER_DEV_PROVIDER_CONFIG));
+  assert.equal(enabledEnvironment.PLATFORM_PROVIDER_OWNER_DEV_ENABLED, "true");
+  assert.equal(enabledEnvironment.PLATFORM_PROVIDER_MODEL_OPENAI, "gpt-4.1-mini");
 });
 
 test("synthesizes static web app hosting and DNS from WebAppBaseUrl", () => {

@@ -479,9 +479,12 @@ credentials. Service task definitions receive resource-derived table names and
 the shared app KMS key reference from the stack.
 
 The M12 owner/dev read-only summarize path has an additional disabled-by-default
-provider gate. To run that path, set `PLATFORM_PROVIDER_OWNER_DEV_ENABLED=true`
-and a provider model such as `PLATFORM_PROVIDER_MODEL_OPENAI` for the selected
-provider. When either key is missing, `/providers` and command errors return
+provider gate. To run that path in dev, set deployment context
+`platformProviderOwnerDevEnabled=true` and `platformProviderModelOpenai` to the
+selected model; CDK injects those values as
+`PLATFORM_PROVIDER_OWNER_DEV_ENABLED=true` and
+`PLATFORM_PROVIDER_MODEL_OPENAI`. The owner/dev switch is rejected outside dev.
+When either key is missing, `/providers` and command errors return
 metadata-only blocker codes naming the missing configuration.
 
 The dogfood runtime uses `CONSENT_GRANT_TABLE_NAME` as the normal source for

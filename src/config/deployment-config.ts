@@ -16,6 +16,8 @@ export interface TargetDeploymentConfig {
   readonly webAppBaseUrl: string;
   readonly googleOAuthClientId: string;
   readonly edgeJwtAuthEnabled: boolean;
+  readonly platformProviderOwnerDevEnabled: boolean;
+  readonly platformProviderModelOpenai?: string;
 }
 
 export type DeploymentConfigByTarget = Partial<Record<EnvironmentName, TargetDeploymentConfig>>;
@@ -59,6 +61,14 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   const trustedUserAuthSubject = requireString(value.trustedUserAuthSubject, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.trustedUserAuthSubject`);
   const webAppBaseUrl = normalizeHttpsOrigin(requireString(value.webAppBaseUrl, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl`), `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.webAppBaseUrl`);
   const googleOAuthClientId = requireString(value.googleOAuthClientId, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.googleOAuthClientId`);
+  const platformProviderOwnerDevEnabled =
+    value.platformProviderOwnerDevEnabled !== undefined
+      ? requireBoolean(value.platformProviderOwnerDevEnabled, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.platformProviderOwnerDevEnabled`)
+      : false;
+  const platformProviderModelOpenai =
+    value.platformProviderModelOpenai === undefined
+      ? undefined
+      : requireString(value.platformProviderModelOpenai, `${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.platformProviderModelOpenai`);
 
   if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.hostedZoneId must be a Route 53 hosted zone id`);
@@ -81,6 +91,12 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
   if (!edgeJwtAuthEnabled && environmentName !== "dev") {
     throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.edgeJwtAuthEnabled may be false only for dev`);
   }
+  if (platformProviderOwnerDevEnabled && environmentName !== "dev") {
+    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.platformProviderOwnerDevEnabled may be true only for dev`);
+  }
+  if (platformProviderOwnerDevEnabled && !platformProviderModelOpenai) {
+    throw new Error(`${DEPLOYMENT_CONFIG_CONTEXT_KEY}.${environmentName}.platformProviderModelOpenai is required when platformProviderOwnerDevEnabled is true`);
+  }
   return {
     hostedZoneId,
     hostedZoneName,
@@ -94,7 +110,9 @@ export function validateTargetDeploymentConfig(environmentName: EnvironmentName,
     trustedUserAuthSubject,
     webAppBaseUrl,
     googleOAuthClientId,
-    edgeJwtAuthEnabled
+    edgeJwtAuthEnabled,
+    platformProviderOwnerDevEnabled,
+    platformProviderModelOpenai
   };
 }
 

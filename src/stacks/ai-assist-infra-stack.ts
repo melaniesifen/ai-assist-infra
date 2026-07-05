@@ -549,6 +549,8 @@ exports.handler = async (event) => {
         GOOGLE_OAUTH_CLIENT_SECRET_REF: buildTargetResourceName(deploymentTarget, "google-oauth-client-secret"),
         PLATFORM_PROVIDER_SECRET_REF_OPENAI: buildTargetResourceName(deploymentTarget, "platform-provider-openai-secret"),
         PLATFORM_PROVIDER_SECRET_REF_ANTHROPIC: buildTargetResourceName(deploymentTarget, "platform-provider-anthropic-secret"),
+        ...(deploymentConfig.platformProviderOwnerDevEnabled ? { PLATFORM_PROVIDER_OWNER_DEV_ENABLED: "true" } : {}),
+        ...(deploymentConfig.platformProviderModelOpenai ? { PLATFORM_PROVIDER_MODEL_OPENAI: deploymentConfig.platformProviderModelOpenai } : {}),
         PLATFORM_PROVIDER_QUOTA_MODE: "enforced",
         PLATFORM_PROVIDER_AUDIT_MODE: "metadata",
         SERVICE_NAME: runtimeResourceName,
