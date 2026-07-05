@@ -793,6 +793,27 @@ assert response["status"] == 202, response
 assert payload["data"]["finishReason"] == "stop", payload
 assert captured["credential"] == "sk-test-secret", captured
 assert captured["request"]["model"] == "test-model", captured
+assert "Summarize the validated document context read-only" in captured["request"]["messages"][0]["content"], captured
+assert "private document text" in captured["request"]["messages"][1]["content"], captured
+assert "sk-test-secret" not in serialized, payload
+assert "private document text" not in serialized, payload
+captured.clear()
+response = app.handle_http_request(
+    method="POST",
+    path="/resource-sessions/session-1/commands",
+    headers={"authorization": "Bearer session-1", "idempotency-key": "idem-2", "x-request-id": "req-2"},
+    body=json.dumps({
+        "resourceId": "doc-1",
+        "contextMode": "ACTIVE_RESOURCE",
+        "command": {"kind": "ASK_ASSISTANT", "commandKind": "suggest_edits"}
+    }).encode("utf-8"),
+)
+payload = json.loads(response["body"].decode("utf-8"))
+serialized = json.dumps(payload)
+assert response["status"] == 202, response
+assert "suggest concrete edits" in captured["request"]["messages"][0]["content"], captured
+assert "Suggest concise, actionable edits" in captured["request"]["messages"][1]["content"], captured
+assert "Summarize this Google Docs context" not in captured["request"]["messages"][1]["content"], captured
 assert "private document text" in captured["request"]["messages"][1]["content"], captured
 assert "sk-test-secret" not in serialized, payload
 assert "private document text" not in serialized, payload

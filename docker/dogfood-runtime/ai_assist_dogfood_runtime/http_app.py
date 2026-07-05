@@ -508,16 +508,39 @@ class DogfoodReadOnlySummarizePromptBuilder:
         command = request.get("command") if isinstance(request.get("command"), dict) else {}
         context = request.get("context") if isinstance(request.get("context"), dict) else {}
         content = context.get("content")
-        return {
-            "messages": [
+        command_metadata = command.get("command") if isinstance(command.get("command"), dict) else {}
+        command_kind = command_metadata.get("commandKind")
+        if command_kind == "suggest_edits":
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are AI Assist in a Google Docs sidebar. Review the validated document context read-only and suggest concrete edits. "
+                        "Do not create proposed actions, claim to mutate the document, or require document write access."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Suggest concise, actionable edits for this Google Docs context. "
+                        "Group suggestions by theme and explain why each edit would improve the document:\n\n"
+                        f"{content}"
+                    ),
+                },
+            ]
+        else:
+            messages = [
                 {
                     "role": "system",
                     "content": "You are AI Assist in a Google Docs sidebar. Summarize the validated document context read-only. Do not propose document mutations.",
                 },
                 {"role": "user", "content": f"Summarize this Google Docs context:\n\n{content}"},
-            ],
+            ]
+        return {
+            "messages": messages,
             "metadata": {
                 "sessionId": command.get("sessionId"),
+                "commandKind": command_kind if isinstance(command_kind, str) else "summarize",
                 "contextMode": command.get("contextMode"),
                 "resourceProvider": context.get("provider") or "google_docs",
             },
